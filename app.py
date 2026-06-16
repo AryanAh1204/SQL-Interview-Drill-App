@@ -578,7 +578,7 @@ with st.sidebar:
     # Sound + animation effects toggle
     effects_on = st.toggle("🔊 Sound & animation", value=True)
     if effects_on:
-        volume_pct = st.slider("Volume", 0, 100, 90, 5)
+        volume_pct = st.slider("Volume", 0, 100, 90, 1)
     else:
         volume_pct = 0
 
