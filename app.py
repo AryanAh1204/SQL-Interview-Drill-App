@@ -49,12 +49,34 @@ html, body, [class*="css"] {
     font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace !important;
 }
 .stApp {
-    background: #0f0f23 !important;
+    background:
+        radial-gradient(900px circle at 10% -8%, #7aa2f722, transparent 45%),
+        radial-gradient(820px circle at 95% 2%, #bb9af71e, transparent 45%),
+        radial-gradient(1100px circle at 50% 118%, #9ece6a14, transparent 52%),
+        #0b0b1a !important;
+    background-attachment: fixed !important;
     color: #c0caf5 !important;
 }
 .stApp > header {
     background: transparent !important;
 }
+/* Faint grid texture for depth — masked so it fades toward the edges. */
+.stApp::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background-image:
+        linear-gradient(#7aa2f70a 1px, transparent 1px),
+        linear-gradient(90deg, #7aa2f70a 1px, transparent 1px);
+    background-size: 46px 46px;
+    pointer-events: none;
+    z-index: 0;
+    -webkit-mask-image: radial-gradient(ellipse 75% 55% at 50% 25%, #000 35%, transparent 100%);
+            mask-image: radial-gradient(ellipse 75% 55% at 50% 25%, #000 35%, transparent 100%);
+}
+/* Keep app content above the grid + cursor glow layers. */
+[data-testid="stAppViewContainer"] .main,
+[data-testid="stMain"] { position: relative; z-index: 1; }
 
 /* ── Sidebar ── */
 [data-testid="stSidebar"] {
@@ -175,12 +197,16 @@ label[data-baseweb="checkbox"] * {
 /* ── Cards (custom HTML divs) ── */
 .drill-card {
     position: relative;
-    background: #1a1b2e;
-    border: 1px solid #2a2d3e;
-    border-radius: 12px;
+    background: linear-gradient(180deg, rgba(26,27,46,0.82), rgba(20,21,36,0.66));
+    backdrop-filter: blur(12px) saturate(120%);
+    -webkit-backdrop-filter: blur(12px) saturate(120%);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
     padding: 1.4rem 1.6rem;
     margin-bottom: 1rem;
     overflow: hidden;
+    /* Soft drop shadow + a subtle inner top-edge sheen for the glass look. */
+    box-shadow: 0 10px 30px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.06);
     transition: border-color 0.25s, transform 0.25s, box-shadow 0.25s, background 0.4s;
     animation: slideIn 0.4s ease;
 }
@@ -253,21 +279,25 @@ label[data-baseweb="checkbox"] * {
 
 /* ── Result banners ── */
 .result-pass {
-    background: #9ece6a18;
-    border: 1px solid #9ece6a60;
+    background: linear-gradient(90deg, #9ece6a22, #9ece6a0a);
+    border: 1px solid #9ece6a55;
+    border-left: 4px solid #9ece6a;
     border-radius: 10px;
     padding: 0.8rem 1.2rem;
     color: #9ece6a;
     font-weight: 700;
+    box-shadow: 0 6px 22px #9ece6a1f;
     animation: bannerPop 0.35s ease;
 }
 .result-fail {
-    background: #f7768e18;
-    border: 1px solid #f7768e60;
+    background: linear-gradient(90deg, #f7768e22, #f7768e0a);
+    border: 1px solid #f7768e55;
+    border-left: 4px solid #f7768e;
     border-radius: 10px;
     padding: 0.8rem 1.2rem;
     color: #f7768e;
     font-weight: 700;
+    box-shadow: 0 6px 22px #f7768e1f;
     animation: bannerPop 0.35s ease;
 }
 @keyframes bannerPop {
@@ -299,18 +329,56 @@ label[data-baseweb="checkbox"] * {
 }
 [data-testid="stExpander"] summary { color: #7aa2f7 !important; }
 
-/* ── Tabs ── */
-[data-testid="stTab"] {
+/* ── Tabs (pill style inside a translucent rail) ── */
+div[data-baseweb="tab-list"] {
+    background: rgba(26,27,46,0.55) !important;
+    backdrop-filter: blur(8px) !important;
+    -webkit-backdrop-filter: blur(8px) !important;
+    border: 1px solid rgba(255,255,255,0.06) !important;
+    border-radius: 12px !important;
+    padding: 4px !important;
+    gap: 4px !important;
+}
+button[data-baseweb="tab"] {
     background: transparent !important;
     color: #565f89 !important;
-    border-bottom: 2px solid transparent !important;
-    transition: all 0.2s !important;
+    border: none !important;
+    border-radius: 9px !important;
+    padding: 0.35rem 1rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.03em !important;
+    transition: color 0.2s, background 0.25s, box-shadow 0.25s !important;
 }
-[data-testid="stTab"]:hover { color: #7aa2f7 !important; }
-[aria-selected="true"][data-testid="stTab"] {
+button[data-baseweb="tab"]:hover { color: #7aa2f7 !important; background: rgba(122,162,247,0.08) !important; }
+button[data-baseweb="tab"][aria-selected="true"] {
+    color: #0f0f23 !important;
+    background: linear-gradient(135deg, #7aa2f7, #bb9af7) !important;
+    box-shadow: 0 4px 16px rgba(122,162,247,0.35) !important;
+}
+/* Hide the default underline highlight bar — the pill carries the active state. */
+div[data-baseweb="tab-highlight"], div[data-baseweb="tab-border"] { display: none !important; }
+
+/* ── Metric cards ── */
+[data-testid="stMetric"] {
+    background: linear-gradient(180deg, rgba(26,27,46,0.82), rgba(20,21,36,0.6));
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 14px;
+    padding: 0.9rem 1.1rem;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.05);
+    transition: border-color 0.25s, transform 0.25s, box-shadow 0.25s;
+}
+[data-testid="stMetric"]:hover {
+    border-color: #7aa2f7;
+    transform: translateY(-3px);
+    box-shadow: 0 14px 34px rgba(122,162,247,0.22), inset 0 1px 0 rgba(255,255,255,0.08);
+}
+[data-testid="stMetricLabel"] p {
     color: #7aa2f7 !important;
-    border-bottom: 2px solid #7aa2f7 !important;
+    font-size: 0.74rem !important;
+    letter-spacing: 0.05em !important;
+    text-transform: uppercase !important;
 }
+[data-testid="stMetricValue"] { color: #c0caf5 !important; font-weight: 700 !important; }
 
 /* ── Dataframe / table ── */
 [data-testid="stDataFrame"] {
@@ -326,8 +394,13 @@ label[data-baseweb="checkbox"] * {
     background: #7aa2f710 !important;
 }
 
-/* ── Divider ── */
-hr { border-color: #2a2d3e !important; }
+/* ── Divider (gradient hairline that fades at both ends) ── */
+hr {
+    border: none !important;
+    height: 1px !important;
+    background: linear-gradient(90deg, transparent, #2a2d3e 20%, #565f8966 50%, #2a2d3e 80%, transparent) !important;
+    margin: 0.7rem 0 !important;
+}
 
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -550,23 +623,33 @@ with st.sidebar:
         format_func=lambda x: ds_labels[x],
     )
 
-    # Tables drop down from the dataset
+    # Tables list for the dataset. Each table is its own expander; we use a plain
+    # section header (not an outer expander) because Streamlit forbids nesting
+    # expanders inside expanders.
     schema = get_schema(selected_ds)
     ds_meta_side = DATASETS[selected_ds]
-    with st.expander(f"{ds_meta_side['emoji']} {selected_ds.title()} — {len(schema)} tables", expanded=True):
-        for table, cols in schema.items():
-            with st.expander(f"🗂 {table}", expanded=False):
-                rows = "".join(
-                    f"<tr>"
-                    f"<td style='padding:3px 10px 3px 0; color:#c0caf5; font-size:0.78rem; white-space:nowrap;'>{c}</td>"
-                    f"<td style='padding:3px 0; color:#565f89; font-size:0.7rem; text-align:right;'>{t}</td>"
-                    f"</tr>"
-                    for c, t in cols
-                )
-                st.markdown(
-                    f"<table style='width:100%; border-collapse:collapse;'>{rows}</table>",
-                    unsafe_allow_html=True,
-                )
+    st.markdown(
+        f"""<div style="display:flex; align-items:center; gap:0.4rem;
+            font-size:0.74rem; letter-spacing:0.08em; text-transform:uppercase;
+            color:#7aa2f7; font-weight:700; margin:0.2rem 0 0.4rem 0;">
+            {ds_meta_side['emoji']} {selected_ds.title()}
+            <span style="color:#565f89; font-weight:500; letter-spacing:0.04em;">· {len(schema)} tables</span>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+    for table, cols in schema.items():
+        with st.expander(f"🗂 {table}", expanded=False):
+            rows = "".join(
+                f"<tr>"
+                f"<td style='padding:3px 10px 3px 0; color:#c0caf5; font-size:0.78rem; white-space:nowrap;'>{c}</td>"
+                f"<td style='padding:3px 0; color:#565f89; font-size:0.7rem; text-align:right;'>{t}</td>"
+                f"</tr>"
+                for c, t in cols
+            )
+            st.markdown(
+                f"<table style='width:100%; border-collapse:collapse;'>{rows}</table>",
+                unsafe_allow_html=True,
+            )
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
@@ -816,10 +899,22 @@ with tab_drill:
     col_main, col_timer = st.columns([3, 1])
 
     with col_main:
+        _accent = meta.get("color", "#7aa2f7")
         st.markdown(
-            f"""<h2 style="margin-bottom:0.2rem;">{meta['emoji']} {DATASETS[selected_ds]['industry']}</h2>
-            <div style="font-size:0.8rem; color:#565f89; margin-bottom:1.2rem;">
-            {DATASETS[selected_ds]['description'][:120]}...
+            f"""<div style="position:relative; padding:1.1rem 1.4rem; margin-bottom:1.2rem;
+                border-radius:16px; overflow:hidden;
+                background:linear-gradient(135deg, {_accent}1f, transparent 70%), rgba(26,27,46,0.55);
+                border:1px solid rgba(255,255,255,0.07);
+                box-shadow:inset 4px 0 0 {_accent}, 0 8px 26px rgba(0,0,0,0.25);">
+                <div style="font-size:0.7rem; letter-spacing:0.18em; color:{_accent};
+                    text-transform:uppercase; font-weight:700; margin-bottom:0.15rem;">
+                    {meta['emoji']} {selected_ds.title()}</div>
+                <div style="font-size:1.55rem; font-weight:800; line-height:1.2;
+                    background:linear-gradient(135deg, #c0caf5, {_accent});
+                    -webkit-background-clip:text; -webkit-text-fill-color:transparent;">
+                    {DATASETS[selected_ds]['industry']}</div>
+                <div style="font-size:0.8rem; color:#565f89; margin-top:0.35rem; line-height:1.6;">
+                    {DATASETS[selected_ds]['description'][:120]}…</div>
             </div>""",
             unsafe_allow_html=True,
         )
