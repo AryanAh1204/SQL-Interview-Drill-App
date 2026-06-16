@@ -1,11 +1,20 @@
 import hashlib
+import hmac
+import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 
 DB_PATH = Path(__file__).parent / "drill_history.db"
+
+# PBKDF2 parameters — salted, slow, and verified in constant time.
+_PBKDF2_ROUNDS = 200_000
+
+
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -38,8 +47,27 @@ def _get_conn() -> sqlite3.Connection:
     return conn
 
 
-def _hash(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
+def _hash_password(password: str, salt: bytes | None = None) -> str:
+    """Return a salted PBKDF2-SHA256 hash, encoded as 'pbkdf2$<salt_hex>$<hash_hex>'."""
+    if salt is None:
+        salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, _PBKDF2_ROUNDS)
+    return f"pbkdf2${salt.hex()}${dk.hex()}"
+
+
+def _verify_password(password: str, stored: str) -> bool:
+    """Constant-time verification. Supports legacy bare-sha256 hashes for migration."""
+    try:
+        if stored.startswith("pbkdf2$"):
+            _, salt_hex, hash_hex = stored.split("$")
+            candidate = hashlib.pbkdf2_hmac(
+                "sha256", password.encode(), bytes.fromhex(salt_hex), _PBKDF2_ROUNDS
+            ).hex()
+            return hmac.compare_digest(candidate, hash_hex)
+        # Legacy unsalted sha256 (pre-upgrade accounts)
+        return hmac.compare_digest(hashlib.sha256(password.encode()).hexdigest(), stored)
+    except Exception:
+        return False
 
 
 # ── Auth ───────────────────────────────────────────────────────────────────────
@@ -56,7 +84,7 @@ def register_user(username: str, password: str) -> tuple[bool, str]:
         return False, "That username is taken."
     conn.execute(
         "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
-        (username, _hash(password), datetime.utcnow().isoformat()),
+        (username, _hash_password(password), _utcnow_iso()),
     )
     conn.commit()
     conn.close()
@@ -69,11 +97,18 @@ def login_user(username: str, password: str) -> tuple[bool, str]:
     row = conn.execute(
         "SELECT password_hash FROM users WHERE username = ?", (username,)
     ).fetchone()
-    conn.close()
     if not row:
         return False, "No account with that username."
-    if row[0] != _hash(password):
+    if not _verify_password(password, row[0]):
         return False, "Incorrect password."
+    # Transparently upgrade legacy unsalted hashes on successful login
+    if not row[0].startswith("pbkdf2$"):
+        conn.execute(
+            "UPDATE users SET password_hash = ? WHERE username = ?",
+            (_hash_password(password), username),
+        )
+        conn.commit()
+    conn.close()
     return True, "Signed in."
 
 
@@ -91,7 +126,7 @@ def log_attempt(
     conn.execute(
         "INSERT INTO attempts (username, timestamp, dataset, topic, difficulty, time_seconds, passed, my_sql) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (username, datetime.utcnow().isoformat(), dataset, topic, difficulty, time_seconds, int(passed), my_sql),
+        (username, _utcnow_iso(), dataset, topic, difficulty, time_seconds, int(passed), my_sql),
     )
     conn.commit()
     conn.close()

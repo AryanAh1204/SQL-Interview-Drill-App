@@ -391,7 +391,7 @@
       "MostRecentOrderRevenue",
       "RevenueChange"
     ],
-    "order_matters": false,
+    "order_matters": true,
     "dataset": "northwind"
   },
   {
@@ -691,7 +691,7 @@
       "OrderDate",
       "TotalOrderValue"
     ],
-    "order_matters": false,
+    "order_matters": true,
     "dataset": "northwind"
   },
   {
@@ -969,7 +969,7 @@
       "Total",
       "RevenueRank"
     ],
-    "order_matters": false,
+    "order_matters": true,
     "dataset": "chinook"
   },
   {
@@ -1328,7 +1328,7 @@
       "LastName",
       "LastInvoiceDate"
     ],
-    "order_matters": false,
+    "order_matters": true,
     "dataset": "chinook"
   },
   {
@@ -1399,7 +1399,7 @@
       "Country",
       "TotalRevenue"
     ],
-    "order_matters": false,
+    "order_matters": true,
     "dataset": "chinook"
   },
   {
@@ -3998,7 +3998,7 @@
       "CustomerName",
       "SupportRepName"
     ],
-    "order_matters": false,
+    "order_matters": true,
     "dataset": "chinook"
   },
   {
@@ -4217,7 +4217,7 @@
       "Country",
       "TotalRevenue"
     ],
-    "order_matters": false,
+    "order_matters": true,
     "dataset": "chinook"
   },
   {
@@ -5210,7 +5210,7 @@
       "name",
       "population"
     ],
-    "order_matters": false,
+    "order_matters": true,
     "dataset": "factbook"
   },
   {

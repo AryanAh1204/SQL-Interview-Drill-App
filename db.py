@@ -33,8 +33,12 @@ def _is_safe_sql(sql: str) -> tuple[bool, str]:
     # Reject multiple statements: a semicolon followed by non-whitespace
     if re.search(r";\s*\S", stripped):
         return False, "Multiple statements are not allowed."
-    # Reject dangerous keywords as a secondary guard
-    upper = stripped.upper()
+    # Secondary guard: scan for mutating keywords, but ignore string literals and
+    # quoted identifiers so a legitimate SELECT containing e.g. 'please update'
+    # is not falsely rejected. (The read-only connection is the real protection.)
+    scrubbed = re.sub(r"'(?:[^']|'')*'", "''", stripped)   # single-quoted strings
+    scrubbed = re.sub(r'"(?:[^"]|"")*"', '""', scrubbed)   # double-quoted identifiers
+    upper = scrubbed.upper()
     for kw in ("INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "ATTACH", "DETACH"):
         if re.search(rf"\b{kw}\b", upper):
             return False, f"Mutating keyword '{kw}' is not allowed."
@@ -64,6 +68,42 @@ def _round_floats(df: pd.DataFrame, decimals: int = 4) -> pd.DataFrame:
     return df
 
 
+_NULL_SENTINEL = "␀NULL␀"  # cannot collide with real data
+
+
+def _normalise(df: pd.DataFrame, order_matters: bool) -> pd.DataFrame:
+    """Round floats, (optionally) sort deterministically, and fill NULLs."""
+    df = _round_floats(df.reset_index(drop=True))
+    canon = [f"c{i}" for i in range(len(df.columns))]
+    df.columns = canon
+    if not order_matters and canon:
+        # Deterministic, always-orderable sort (stringified) so mixed-type
+        # columns never silently skip sorting and flip the comparison semantics.
+        df = df.sort_values(by=canon, key=lambda s: s.astype(str)).reset_index(drop=True)
+    return df.fillna(_NULL_SENTINEL)
+
+
+def _frames_match(ref_sub: pd.DataFrame, user_sub: pd.DataFrame, order_matters: bool):
+    """Return (passed, reason, ref_display_cols) comparing two equal-width frames."""
+    ref_display = list(ref_sub.columns)
+    ref_n = _normalise(ref_sub, order_matters)
+    user_n = _normalise(user_sub, order_matters)
+    if len(ref_n) != len(user_n):
+        return False, f"Wrong row count: expected {len(ref_n)}, got {len(user_n)}", ref_display
+    for i, (r_row, u_row) in enumerate(
+        zip(ref_n.itertuples(index=False), user_n.itertuples(index=False))
+    ):
+        if r_row != u_row:
+            j = next(idx for idx, (a, b) in enumerate(zip(r_row, u_row)) if a != b)
+            return (
+                False,
+                f"Value mismatch at row {i+1}, column '{ref_display[j]}': "
+                f"expected {r_row[j]!r}, got {u_row[j]!r}",
+                ref_display,
+            )
+    return True, "All required columns and rows match.", ref_display
+
+
 def compare_results(
     ref_df: pd.DataFrame,
     user_df: pd.DataFrame,
@@ -74,61 +114,33 @@ def compare_results(
     ref_map = {c.lower(): c for c in ref_df.columns}
     ref_cols = [ref_map[c.lower()] for c in required_cols if c.lower() in ref_map]
     ref_sub = ref_df[ref_cols]
+    k = len(ref_cols)
 
-    # Select the user's columns by DATA, not header names:
-    #   1) if the user's headers happen to match the required names, use those;
-    #   2) otherwise, if the user returned the same number of columns, compare
-    #      positionally so a correct result with different aliases still passes.
+    # Primary path: the user's headers match the required names. Use them and
+    # return the detailed result (so a genuine value mismatch is reported clearly).
     user_cols_lower = {c.lower() for c in user_df.columns}
     if all(c.lower() in user_cols_lower for c in required_cols):
         col_map = {c.lower(): c for c in user_df.columns}
         user_sub = user_df[[col_map[c.lower()] for c in required_cols]]
-    elif len(user_df.columns) == len(ref_cols):
-        user_sub = user_df  # header-agnostic positional comparison
-    else:
+        passed, reason, _ = _frames_match(ref_sub, user_sub, order_matters)
+        return passed, reason
+
+    # Header-agnostic path: names don't match. Grade by DATA — try every
+    # order-preserving combination of the user's columns of the right width, so
+    # both aliased columns AND a superset of columns still pass when the rows match.
+    if len(user_df.columns) < k:
         return False, (
-            f"Wrong number of columns: expected {len(ref_cols)} "
+            f"Wrong number of columns: expected {k} "
             f"({', '.join(required_cols)}), got {len(user_df.columns)}"
         )
 
-    ref_sub = _round_floats(ref_sub.reset_index(drop=True))
-    user_sub = _round_floats(user_sub.reset_index(drop=True))
+    from itertools import combinations
 
-    # Keep the reference's real column names for error messages, but compare on
-    # canonical positional names so headers are ignored entirely.
-    ref_display = list(ref_sub.columns)
-    canon = [f"c{i}" for i in range(len(ref_sub.columns))]
-    ref_sub.columns = canon
-    user_sub.columns = canon
-
-    if not order_matters:
-        try:
-            ref_sub = ref_sub.sort_values(by=list(ref_sub.columns)).reset_index(drop=True)
-            user_sub = user_sub.sort_values(by=list(user_sub.columns)).reset_index(drop=True)
-        except Exception:
-            pass
-
-    # Make NULLs comparable: NaN != NaN, so fill both frames with a sentinel that
-    # cannot collide with real data. Done AFTER sorting (filling earlier upcasts
-    # columns to object and can break sort_values).
-    _NULL = "␀NULL␀"
-    ref_sub = ref_sub.fillna(_NULL)
-    user_sub = user_sub.fillna(_NULL)
-
-    if len(ref_sub) != len(user_sub):
-        return False, (
-            f"Wrong row count: expected {len(ref_sub)}, got {len(user_sub)}"
-        )
-
-    # Row-by-row comparison (on the filled frames)
-    for i, (r_row, u_row) in enumerate(zip(ref_sub.itertuples(index=False), user_sub.itertuples(index=False))):
-        if r_row != u_row:
-            j = next(idx for idx, (a, b) in enumerate(zip(r_row, u_row)) if a != b)
-            col = ref_display[j]
-            exp_val, got_val = r_row[j], u_row[j]
-            return False, (
-                f"Value mismatch at row {i+1}, column '{col}': "
-                f"expected {exp_val!r}, got {got_val!r}"
-            )
-
-    return True, "All required columns and rows match."
+    last_reason = "Result rows do not match the expected answer."
+    for combo in combinations(range(len(user_df.columns)), k):
+        user_sub = user_df.iloc[:, list(combo)]
+        passed, reason, _ = _frames_match(ref_sub, user_sub, order_matters)
+        if passed:
+            return True, reason
+        last_reason = reason
+    return False, last_reason

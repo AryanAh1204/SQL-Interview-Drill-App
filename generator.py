@@ -107,6 +107,17 @@ Return exactly this JSON structure:
             if missing:
                 raise ValueError(f"required_columns not in output: {missing}")
 
+            # Sanity-check order_matters: if the prompt clearly implies ordering
+            # (rank / top-N / "in order" / "highest/lowest ... by"), enforce it so a
+            # genuinely ordered answer isn't graded leniently as order-insensitive.
+            q_text = f"{q.get('question','')} {q.get('business_context','')}".lower()
+            ordering_signals = (
+                "rank", "top ", "bottom ", "highest", "lowest", "in order",
+                "ordered by", "sort", "descending", "ascending", "first ", "last ",
+            )
+            if any(sig in q_text for sig in ordering_signals):
+                q["order_matters"] = True
+
             q["_ref_df"] = df  # cache result for grader
             return q
 

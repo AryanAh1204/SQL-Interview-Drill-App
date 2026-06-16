@@ -1,6 +1,8 @@
-streamlit>=1.35
-pandas
-anthropic>=0.25
-python-dotenv
-streamlit-ace
-requests
+streamlit>=1.35,<2
+pandas>=2.0,<3
+anthropic>=0.25,<1
+python-dotenv>=1.0,<2
+streamlit-ace>=0.1.1,<0.2
+streamlit-autorefresh>=1.0,<2
+requests>=2.31,<3
+pytest>=8.0,<9

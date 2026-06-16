@@ -1,9 +1,16 @@
+import os
 import time
 from pathlib import Path
 
 import anthropic
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
+
+try:
+    from streamlit_autorefresh import st_autorefresh
+except Exception:  # optional dependency — timer still works on interaction
+    st_autorefresh = None
 
 load_dotenv()
 
@@ -344,7 +351,6 @@ hr { border-color: #2a2d3e !important; }
 
 # Cursor glow — injected via components.html so the JS actually runs, then
 # attaches the glow elements + listener to the PARENT (main app) document.
-import streamlit.components.v1 as components
 
 components.html(
     """
@@ -380,6 +386,7 @@ def _init_state():
         "schema_cache": {},
         "username": None,
         "animate": None,
+        "login_attempts": 0,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -414,7 +421,6 @@ if not QUESTION_BANK:
     st.stop()
 
 # ── Anthropic client (OPTIONAL — only used for post-answer style feedback) ──────
-import os
 api_key = os.getenv("ANTHROPIC_API_KEY", "")
 if not api_key:
     try:
@@ -443,12 +449,19 @@ def render_login():
         with tab_in:
             u = st.text_input("Username", key="login_user")
             p = st.text_input("Password", type="password", key="login_pass")
-            if st.button("Sign In", use_container_width=True, key="do_login"):
+            # Simple per-session rate limit: block after repeated failures.
+            attempts = st.session_state.get("login_attempts", 0)
+            locked = attempts >= 5
+            if locked:
+                st.error("Too many failed attempts. Reload the page to try again.")
+            if st.button("Sign In", use_container_width=True, key="do_login", disabled=locked):
                 ok, msg = login_user(u, p)
                 if ok:
+                    st.session_state.login_attempts = 0
                     st.session_state.username = u.strip().lower()
                     st.rerun()
                 else:
+                    st.session_state.login_attempts = attempts + 1
                     st.error(msg)
             st.caption("Or continue without an account:")
             if st.button("Continue as Guest", use_container_width=True, key="guest"):
@@ -561,6 +574,9 @@ with st.sidebar:
     pressure_mode = st.toggle("⏱ Pressure Mode", value=False)
     if pressure_mode:
         pressure_seconds = st.slider("Countdown (seconds)", 60, 600, 300, 30)
+
+    # Sound + animation effects toggle
+    effects_on = st.toggle("🔊 Sound & animation", value=True)
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
@@ -779,6 +795,9 @@ with tab_drill:
         # ── Timer update ───────────────────────────────────────────────────────
         if st.session_state.start_time and not st.session_state.graded:
             st.session_state.elapsed = time.time() - st.session_state.start_time
+            # Tick the stopwatch / countdown live (1s) while a question is active.
+            if st_autorefresh is not None:
+                st_autorefresh(interval=1000, key="timer_tick")
 
         elapsed = st.session_state.elapsed
         mins = int(elapsed) // 60
@@ -877,9 +896,10 @@ with tab_drill:
         # ── Grade result ──────────────────────────────────────────────────────
         gr = st.session_state.grade_result
         if gr:
-            # One-shot celebration / commiseration animation
+            # One-shot celebration / commiseration animation (if effects enabled)
             if st.session_state.animate:
-                play_animation(st.session_state.animate)
+                if effects_on:
+                    play_animation(st.session_state.animate)
                 st.session_state.animate = None
 
             if gr["passed"]:
