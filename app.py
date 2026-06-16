@@ -1,4 +1,5 @@
 import os
+import random
 import time
 from pathlib import Path
 
@@ -392,6 +393,14 @@ def _init_state():
         "sess_total": 0,
         "sess_passed": 0,
         "sess_time": 0.0,
+        "mock_active": False,
+        "mock_done": False,
+        "mock_qs": [],
+        "mock_refs": [],
+        "mock_i": 0,
+        "mock_results": [],
+        "mock_overall_start": None,
+        "mock_q_start": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -797,7 +806,7 @@ def play_animation(kind: str, volume: float = 0.9):
 
 
 # ── Main tabs ──────────────────────────────────────────────────────────────────
-tab_drill, tab_stats = st.tabs(["⚡  Drill", "📊  Stats"])
+tab_drill, tab_mock, tab_stats = st.tabs(["⚡  Drill", "🎤  Mock Interview", "📊  Stats"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1263,3 +1272,195 @@ with tab_stats:
                 </div>""",
                 unsafe_allow_html=True,
             )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MOCK INTERVIEW TAB
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab_mock:
+    st.markdown("<h2>🎤 Mock Interview</h2>", unsafe_allow_html=True)
+
+    def _reset_mock():
+        for k, v in {
+            "mock_active": False, "mock_done": False, "mock_qs": [], "mock_refs": [],
+            "mock_i": 0, "mock_results": [], "mock_overall_start": None, "mock_q_start": None,
+        }.items():
+            st.session_state[k] = v
+
+    # ── Setup screen ────────────────────────────────────────────────────────────
+    if not st.session_state.mock_active and not st.session_state.mock_done:
+        st.markdown(
+            """<div style="color:#565f89; font-size:0.9rem; line-height:1.7; margin-bottom:1rem;">
+            A timed round of back-to-back questions — no hints, no answer reveals. Solve each,
+            submit, and get a scorecard at the end. Just like the real thing.</div>""",
+            unsafe_allow_html=True,
+        )
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            n_q = st.slider("Questions", 3, 10, 5)
+        with c2:
+            ds_choice = st.selectbox("Dataset", ["Mixed"] + list(available_datasets.keys()),
+                                     format_func=lambda x: x.title())
+        with c3:
+            diff_choice = st.selectbox("Difficulty", ["Mixed", "easy", "medium", "hard"])
+
+        if st.button("▶ Start Interview", use_container_width=False):
+            pool = [
+                q for q in QUESTION_BANK
+                if (ds_choice == "Mixed" or q["dataset"] == ds_choice)
+                and (diff_choice == "Mixed" or q["difficulty"] == diff_choice)
+            ]
+            if len(pool) < n_q:
+                st.warning(f"Only {len(pool)} questions match — pick a broader filter.")
+            else:
+                chosen = random.sample(pool, n_q)
+                refs = []
+                ok = True
+                for q in chosen:
+                    conn = get_connection(available_datasets[q["dataset"]])
+                    ref_df, err = safe_execute(q["reference_sql"], conn)
+                    conn.close()
+                    if err or ref_df is None:
+                        ok = False
+                        break
+                    refs.append(ref_df)
+                if not ok:
+                    st.error("Could not prepare the question set — try again.")
+                else:
+                    _reset_mock()
+                    st.session_state.mock_qs = chosen
+                    st.session_state.mock_refs = refs
+                    st.session_state.mock_active = True
+                    st.session_state.mock_overall_start = time.time()
+                    st.session_state.mock_q_start = time.time()
+                    st.rerun()
+
+    # ── Active interview ────────────────────────────────────────────────────────
+    elif st.session_state.mock_active:
+        qs = st.session_state.mock_qs
+        i = st.session_state.mock_i
+        q = qs[i]
+        total = len(qs)
+
+        # Overall timer (counts up, live)
+        if st_autorefresh is not None:
+            st_autorefresh(interval=1000, key="mock_tick")
+        overall = int(time.time() - st.session_state.mock_overall_start)
+
+        head_l, head_r = st.columns([3, 1])
+        with head_l:
+            st.markdown(
+                f"<div style='color:#7aa2f7; font-weight:700; letter-spacing:0.06em;'>"
+                f"QUESTION {i+1} / {total}</div>",
+                unsafe_allow_html=True,
+            )
+        with head_r:
+            st.markdown(
+                f"<div class='timer-display' style='font-size:1.6rem;'>{overall//60:02d}:{overall%60:02d}</div>",
+                unsafe_allow_html=True,
+            )
+        st.progress(i / total)
+
+        diff_class = f"badge-{q['difficulty']}"
+        st.markdown(
+            f"""<div class="drill-card">
+            <div style="margin-bottom:0.6rem;">
+                <span class="badge badge-ds">{q['dataset']}</span>&nbsp;
+                <span class="badge {diff_class}">{q['difficulty']}</span>&nbsp;
+                <span class="badge badge-topic">{q['topic']}</span>
+            </div>
+            <div style="color:#565f89; font-size:0.8rem; font-style:italic; margin-bottom:0.8rem; line-height:1.6;">
+                {q['business_context']}
+            </div>
+            <div style="font-size:1.05rem; font-weight:500; color:#c0caf5; line-height:1.7;">
+                {q['question']}
+            </div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+
+        try:
+            from streamlit_ace import st_ace
+            mock_sql = st_ace(
+                placeholder="-- Your SQL here...\nSELECT ...",
+                language="sql", theme="dracula", font_size=14, height=200,
+                key=f"mock_ace_{i}", auto_update=True,
+            )
+        except ImportError:
+            mock_sql = st.text_area("Your SQL Query", height=200, key=f"mock_sql_{i}")
+
+        bcol1, bcol2, _ = st.columns([1, 1, 2])
+        submit_mock = bcol1.button("▶ Submit & Next", use_container_width=True, key=f"mock_submit_{i}")
+        skip_mock = bcol2.button("⏭ Skip", use_container_width=True, key=f"mock_skip_{i}")
+
+        def _record(passed, sql_text):
+            q_time = time.time() - st.session_state.mock_q_start
+            st.session_state.mock_results.append({
+                "topic": q["topic"], "difficulty": q["difficulty"],
+                "dataset": q["dataset"], "passed": passed, "time": q_time,
+            })
+            log_attempt(
+                username=username, dataset=q["dataset"], topic=q["topic"],
+                difficulty=q["difficulty"], time_seconds=q_time,
+                passed=passed, my_sql=sql_text,
+            )
+            if i + 1 >= total:
+                st.session_state.mock_active = False
+                st.session_state.mock_done = True
+            else:
+                st.session_state.mock_i = i + 1
+                st.session_state.mock_q_start = time.time()
+            st.rerun()
+
+        if submit_mock and mock_sql and mock_sql.strip():
+            conn = get_connection(available_datasets[q["dataset"]])
+            res = grade(user_sql=mock_sql, ref_df=st.session_state.mock_refs[i], question=q, conn=conn)
+            conn.close()
+            _record(res["passed"], mock_sql)
+        elif skip_mock:
+            _record(False, "")
+
+        st.caption("No hints or reveals during a mock interview — that's the point. 💪")
+
+    # ── Scorecard ───────────────────────────────────────────────────────────────
+    elif st.session_state.mock_done:
+        results = st.session_state.mock_results
+        total = len(results)
+        passed = sum(r["passed"] for r in results)
+        total_time = int(time.time() - st.session_state.mock_overall_start) if st.session_state.mock_overall_start else int(sum(r["time"] for r in results))
+        score_pct = round(passed / total * 100) if total else 0
+        verdict = ("🟢 Strong" if score_pct >= 80 else
+                   "🟡 Solid, keep drilling" if score_pct >= 50 else
+                   "🔴 Needs work")
+
+        st.markdown(
+            f"""<div class="drill-card" style="text-align:center; border-color:#7aa2f7;">
+            <div style="font-size:0.8rem; color:#565f89; letter-spacing:0.1em;">INTERVIEW COMPLETE</div>
+            <div style="font-size:3rem; font-weight:800;
+                background:linear-gradient(135deg,#7aa2f7,#bb9af7);
+                -webkit-background-clip:text; -webkit-text-fill-color:transparent;">
+                {passed} / {total}</div>
+            <div style="color:#c0caf5; font-size:1.1rem;">{score_pct}% · {verdict}</div>
+            <div style="color:#565f89; font-size:0.85rem; margin-top:0.4rem;">
+                Total time {total_time//60:02d}:{total_time%60:02d}</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+
+        import pandas as _pd
+        card = _pd.DataFrame([
+            {
+                "#": idx + 1,
+                "Topic": r["topic"],
+                "Difficulty": r["difficulty"],
+                "Dataset": r["dataset"],
+                "Result": "✅ Pass" if r["passed"] else "❌ Fail",
+                "Time": f"{int(r['time'])//60:02d}:{int(r['time'])%60:02d}",
+            }
+            for idx, r in enumerate(results)
+        ])
+        st.dataframe(card, use_container_width=True, hide_index=True)
+
+        if st.button("🔄 New Interview", use_container_width=False):
+            _reset_mock()
+            st.rerun()
