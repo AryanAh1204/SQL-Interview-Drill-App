@@ -592,15 +592,49 @@ with st.sidebar:
 
 
 # ── Result animations ──────────────────────────────────────────────────────────
+_SOUNDS_DIR = Path(__file__).parent / "assets" / "sounds"
+_AUDIO_MIME = {".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg",
+               ".m4a": "audio/mp4", ".aac": "audio/aac"}
+
+
+@st.cache_data(show_spinner=False)
+def _load_sound(kind: str):
+    """Return (data_url) for a bundled correct/wrong sound, or None if absent.
+
+    Looks for assets/sounds/correct.* (kind='pass') or wrong.* (kind='fail').
+    """
+    import base64
+
+    stem = "correct" if kind == "pass" else "wrong"
+    if not _SOUNDS_DIR.exists():
+        return None
+    for f in sorted(_SOUNDS_DIR.glob(f"{stem}.*")):
+        mime = _AUDIO_MIME.get(f.suffix.lower())
+        if mime:
+            b64 = base64.b64encode(f.read_bytes()).decode()
+            return f"data:{mime};base64,{b64}"
+    return None
+
+
 def play_animation(kind: str):
     """Fire a one-shot full-screen animation onto the parent document.
 
     kind == 'pass' -> confetti crackers burst.
     kind == 'fail' -> a big thumbs-down waves across the screen.
+
+    Sound: plays a bundled audio file (assets/sounds/correct|wrong.*) if present,
+    otherwise falls back to a synthesized Web Audio cue.
     """
-    if kind == "pass":
-        js = """
-        // ── Cheerful "ta-da" fanfare ──
+    sound_url = _load_sound(kind)
+    if sound_url:
+        sound_js = (
+            "try { const a = new (window.parent || window).Audio('" + sound_url + "');"
+            " a.volume = 0.9; a.play().catch(()=>{}); } catch (e) {}"
+        )
+    else:
+        sound_js = None
+
+    pass_synth = """
         try {
             const W = window.parent || window;
             const AC = W.AudioContext || W.webkitAudioContext;
@@ -619,7 +653,37 @@ def play_animation(kind: str):
                 o.start(t); o.stop(t + hold + 0.05);
             });
         } catch (e) {}
+    """
+    fail_synth = """
+        try {
+            const W = window.parent || window;
+            const AC = W.AudioContext || W.webkitAudioContext;
+            const ac = W.__sqlDrillAudio || (W.__sqlDrillAudio = new AC());
+            if (ac.resume) ac.resume();
+            const notes = [233.08, 220.00, 207.65, 174.61]; // Bb3 A3 Ab3 F3 descending
+            notes.forEach((f, i) => {
+                const t = ac.currentTime + i * 0.32;
+                const dur = (i === notes.length - 1) ? 0.85 : 0.3;
+                const o = ac.createOscillator(), g = ac.createGain();
+                const lp = ac.createBiquadFilter();
+                lp.type = 'lowpass'; lp.frequency.value = 900;
+                o.type = 'sawtooth';
+                o.frequency.setValueAtTime(f * 1.06, t);
+                o.frequency.exponentialRampToValueAtTime(f, t + 0.12);
+                g.gain.setValueAtTime(0.0001, t);
+                g.gain.exponentialRampToValueAtTime(0.28, t + 0.04);
+                g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+                o.connect(lp).connect(g).connect(ac.destination);
+                o.start(t); o.stop(t + dur + 0.05);
+            });
+        } catch (e) {}
+    """
 
+    # Choose audio: bundled file if present, else the synthesized fallback.
+    audio_js = sound_js if sound_js else (pass_synth if kind == "pass" else fail_synth)
+
+    if kind == "pass":
+        js = audio_js + """
         const doc = window.parent.document;
         const cv = doc.createElement('canvas');
         cv.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;pointer-events:none;z-index:99999';
@@ -656,31 +720,7 @@ def play_animation(kind: str):
         })();
         """
     else:
-        js = """
-        // ── "Sad trombone" wah-wah-wah-waaah ──
-        try {
-            const W = window.parent || window;
-            const AC = W.AudioContext || W.webkitAudioContext;
-            const ac = W.__sqlDrillAudio || (W.__sqlDrillAudio = new AC());
-            if (ac.resume) ac.resume();
-            const notes = [233.08, 220.00, 207.65, 174.61]; // Bb3 A3 Ab3 F3 descending
-            notes.forEach((f, i) => {
-                const t = ac.currentTime + i * 0.32;
-                const dur = (i === notes.length - 1) ? 0.85 : 0.3;
-                const o = ac.createOscillator(), g = ac.createGain();
-                const lp = ac.createBiquadFilter();
-                lp.type = 'lowpass'; lp.frequency.value = 900;
-                o.type = 'sawtooth';
-                o.frequency.setValueAtTime(f * 1.06, t);
-                o.frequency.exponentialRampToValueAtTime(f, t + 0.12); // pitch "wah" bend down
-                g.gain.setValueAtTime(0.0001, t);
-                g.gain.exponentialRampToValueAtTime(0.28, t + 0.04);
-                g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-                o.connect(lp).connect(g).connect(ac.destination);
-                o.start(t); o.stop(t + dur + 0.05);
-            });
-        } catch (e) {}
-
+        js = audio_js + """
         const doc = window.parent.document;
         const el = doc.createElement('div');
         el.textContent = '👎';
