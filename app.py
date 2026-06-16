@@ -7,9 +7,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from bank import load_bank, pick_question
 from datasets import DATASETS, ensure_datasets
-from db import get_connection, introspect_schema
-from generator import TOPICS, generate_question
+from db import get_connection, introspect_schema, safe_execute
+from generator import TOPICS
 from grader import get_style_feedback, grade
 from storage import (
     get_stats,
@@ -399,13 +400,27 @@ if not available_datasets:
     st.error("No datasets could be loaded. Check your internet connection and restart.")
     st.stop()
 
-# ── Anthropic client ───────────────────────────────────────────────────────────
-import os
-api_key = st.secrets.get("ANTHROPIC_API_KEY", "") or os.getenv("ANTHROPIC_API_KEY", "")
-if not api_key:
-    st.error("Set ANTHROPIC_API_KEY in your .env file (local) or Streamlit Cloud secrets (deployed).")
+
+# ── Question bank ──────────────────────────────────────────────────────────────
+@st.cache_resource
+def load_question_bank():
+    return load_bank()
+
+
+QUESTION_BANK = load_question_bank()
+if not QUESTION_BANK:
+    st.error("question_bank.json is empty or missing. Run `python build_bank.py` to generate it.")
     st.stop()
-client = anthropic.Anthropic(api_key=api_key)
+
+# ── Anthropic client (OPTIONAL — only used for post-answer style feedback) ──────
+import os
+api_key = os.getenv("ANTHROPIC_API_KEY", "")
+if not api_key:
+    try:
+        api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+    except Exception:
+        api_key = ""
+client = anthropic.Anthropic(api_key=api_key) if api_key else None
 
 
 # ── Sign-in gate ───────────────────────────────────────────────────────────────
@@ -581,30 +596,43 @@ with tab_drill:
     with col_timer:
         timer_slot = st.empty()
 
-    # ── Generate button ────────────────────────────────────────────────────────
+    # ── New Question button ────────────────────────────────────────────────────
     gen_col, _ = st.columns([1, 3])
     with gen_col:
-        gen_clicked = st.button("⚡ Generate Question", use_container_width=True)
+        gen_clicked = st.button("⚡ New Question", use_container_width=True)
 
     if gen_clicked:
-        # Resolve topic
-        actual_topic = topic_label
+        # Resolve topic (None = any topic)
+        actual_topic = None if topic_label == "🎯 Target my weakness" else topic_label
         if topic_label == "🎯 Target my weakness":
             w = get_weakest_topic(username)
-            actual_topic = w[1] if w else TOPICS[0]
+            actual_topic = w[1] if w else None
 
-        conn = get_connection(available_datasets[selected_ds])
-        with st.spinner("Crafting your question..."):
-            try:
-                q = generate_question(
-                    schema=schema,
-                    dataset_meta=DATASETS[selected_ds],
-                    topic=actual_topic,
-                    difficulty=difficulty,
-                    conn=conn,
-                    client=client,
-                )
-                ref_df = q.pop("_ref_df")
+        # Track which bank indices we've already shown this session (per dataset)
+        seen = st.session_state.setdefault("seen_idx", set())
+
+        q, idx = pick_question(
+            QUESTION_BANK,
+            dataset=selected_ds,
+            topic=actual_topic,
+            difficulty=difficulty,
+            exclude=seen,
+        )
+
+        if q is None:
+            st.warning(
+                "No question in the bank matches that dataset/topic/difficulty. "
+                "Try a different combination."
+            )
+        else:
+            seen.add(idx)
+            # Run the reference SQL locally to get the expected result set (no API)
+            conn = get_connection(available_datasets[selected_ds])
+            ref_df, err = safe_execute(q["reference_sql"], conn)
+            conn.close()
+            if err or ref_df is None:
+                st.error(f"Bank question has a broken reference query: {err}")
+            else:
                 st.session_state.question = q
                 st.session_state.ref_df = ref_df
                 st.session_state.start_time = time.time()
@@ -613,9 +641,6 @@ with tab_drill:
                 st.session_state.graded = False
                 st.session_state.grade_result = None
                 st.session_state.feedback = None
-            except Exception as e:
-                st.error(f"Generation failed: {e}")
-        conn.close()
 
     # ── Display question ───────────────────────────────────────────────────────
     q = st.session_state.question
@@ -710,8 +735,8 @@ with tab_drill:
 
             if not result["passed"]:
                 st.session_state.fail_count += 1
-            else:
-                # Style feedback only on pass
+            elif client is not None:
+                # Optional style feedback on pass — only if an API key is configured
                 with st.spinner("Getting style feedback..."):
                     try:
                         fb = get_style_feedback(
@@ -781,7 +806,7 @@ with tab_drill:
             """<div class="drill-card" style="text-align:center; padding:2.5rem; color:#565f89;">
             <div style="font-size:2.5rem; margin-bottom:0.5rem;">⚡</div>
             <div style="font-size:1.1rem; color:#7aa2f7; font-weight:600;">Ready to drill?</div>
-            <div style="margin-top:0.4rem;">Pick a topic and difficulty in the sidebar, then click Generate Question.</div>
+            <div style="margin-top:0.4rem;">Pick a topic and difficulty in the sidebar, then click New Question.</div>
             </div>""",
             unsafe_allow_html=True,
         )
