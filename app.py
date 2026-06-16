@@ -584,6 +584,24 @@ def play_animation(kind: str):
     """
     if kind == "pass":
         js = """
+        // ── Cheerful "ta-da" fanfare ──
+        try {
+            const AC = window.AudioContext || window.webkitAudioContext;
+            const ac = new AC();
+            const notes = [523.25, 659.25, 783.99, 1046.50]; // C5 E5 G5 C6
+            notes.forEach((f, i) => {
+                const t = ac.currentTime + i * 0.12;
+                const o = ac.createOscillator(), g = ac.createGain();
+                o.type = 'triangle'; o.frequency.value = f;
+                const hold = (i === notes.length - 1) ? 0.55 : 0.16;
+                g.gain.setValueAtTime(0.0001, t);
+                g.gain.exponentialRampToValueAtTime(0.32, t + 0.02);
+                g.gain.exponentialRampToValueAtTime(0.0001, t + hold);
+                o.connect(g).connect(ac.destination);
+                o.start(t); o.stop(t + hold + 0.05);
+            });
+        } catch (e) {}
+
         const doc = window.parent.document;
         const cv = doc.createElement('canvas');
         cv.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;pointer-events:none;z-index:99999';
@@ -621,6 +639,28 @@ def play_animation(kind: str):
         """
     else:
         js = """
+        // ── "Sad trombone" wah-wah-wah-waaah ──
+        try {
+            const AC = window.AudioContext || window.webkitAudioContext;
+            const ac = new AC();
+            const notes = [233.08, 220.00, 207.65, 174.61]; // Bb3 A3 Ab3 F3 descending
+            notes.forEach((f, i) => {
+                const t = ac.currentTime + i * 0.32;
+                const dur = (i === notes.length - 1) ? 0.85 : 0.3;
+                const o = ac.createOscillator(), g = ac.createGain();
+                const lp = ac.createBiquadFilter();
+                lp.type = 'lowpass'; lp.frequency.value = 900;
+                o.type = 'sawtooth';
+                o.frequency.setValueAtTime(f * 1.06, t);
+                o.frequency.exponentialRampToValueAtTime(f, t + 0.12); // pitch "wah" bend down
+                g.gain.setValueAtTime(0.0001, t);
+                g.gain.exponentialRampToValueAtTime(0.28, t + 0.04);
+                g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+                o.connect(lp).connect(g).connect(ac.destination);
+                o.start(t); o.stop(t + dur + 0.05);
+            });
+        } catch (e) {}
+
         const doc = window.parent.document;
         const el = doc.createElement('div');
         el.textContent = '👎';
