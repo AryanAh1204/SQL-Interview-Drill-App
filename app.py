@@ -316,9 +316,9 @@ if not available_datasets:
 
 # ── Anthropic client ───────────────────────────────────────────────────────────
 import os
-api_key = os.getenv("ANTHROPIC_API_KEY", "")
+api_key = st.secrets.get("ANTHROPIC_API_KEY", "") or os.getenv("ANTHROPIC_API_KEY", "")
 if not api_key:
-    st.error("Set ANTHROPIC_API_KEY in your .env file.")
+    st.error("Set ANTHROPIC_API_KEY in your .env file (local) or Streamlit Cloud secrets (deployed).")
     st.stop()
 client = anthropic.Anthropic(api_key=api_key)
 
