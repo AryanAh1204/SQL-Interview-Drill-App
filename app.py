@@ -355,14 +355,15 @@ with st.sidebar:
         format_func=lambda x: ds_labels[x],
     )
 
-    # Show schema info
+    # Show schema info — tables always visible, columns in expander
     schema = get_schema(selected_ds)
-    with st.expander("📋 Schema", expanded=False):
-        for table, cols in schema.items():
-            st.markdown(f"**{table}**")
-            col_text = " · ".join(f"`{c}`" for c, _ in cols[:8])
-            if len(cols) > 8:
-                col_text += f" · _+{len(cols)-8} more_"
+    st.markdown(
+        "<div style='font-size:0.72rem; color:#7aa2f7; letter-spacing:0.08em; text-transform:uppercase; margin-bottom:0.4rem;'>Tables</div>",
+        unsafe_allow_html=True,
+    )
+    for table, cols in schema.items():
+        with st.expander(f"🗂 {table}", expanded=False):
+            col_text = "\n".join(f"• `{c}` — {t}" for c, t in cols)
             st.markdown(col_text)
 
     st.markdown("<hr>", unsafe_allow_html=True)
