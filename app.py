@@ -586,8 +586,10 @@ def play_animation(kind: str):
         js = """
         // ── Cheerful "ta-da" fanfare ──
         try {
-            const AC = window.AudioContext || window.webkitAudioContext;
-            const ac = new AC();
+            const W = window.parent || window;
+            const AC = W.AudioContext || W.webkitAudioContext;
+            const ac = W.__sqlDrillAudio || (W.__sqlDrillAudio = new AC());
+            if (ac.resume) ac.resume();
             const notes = [523.25, 659.25, 783.99, 1046.50]; // C5 E5 G5 C6
             notes.forEach((f, i) => {
                 const t = ac.currentTime + i * 0.12;
@@ -641,8 +643,10 @@ def play_animation(kind: str):
         js = """
         // ── "Sad trombone" wah-wah-wah-waaah ──
         try {
-            const AC = window.AudioContext || window.webkitAudioContext;
-            const ac = new AC();
+            const W = window.parent || window;
+            const AC = W.AudioContext || W.webkitAudioContext;
+            const ac = W.__sqlDrillAudio || (W.__sqlDrillAudio = new AC());
+            if (ac.resume) ac.resume();
             const notes = [233.08, 220.00, 207.65, 174.61]; // Bb3 A3 Ab3 F3 descending
             notes.forEach((f, i) => {
                 const t = ac.currentTime + i * 0.32;
