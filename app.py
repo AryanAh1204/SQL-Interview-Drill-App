@@ -379,6 +379,7 @@ def _init_state():
         "feedback": None,
         "schema_cache": {},
         "username": None,
+        "animate": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -574,6 +575,74 @@ with st.sidebar:
     )
 
 
+# ── Result animations ──────────────────────────────────────────────────────────
+def play_animation(kind: str):
+    """Fire a one-shot full-screen animation onto the parent document.
+
+    kind == 'pass' -> confetti crackers burst.
+    kind == 'fail' -> a big thumbs-down waves across the screen.
+    """
+    if kind == "pass":
+        js = """
+        const doc = window.parent.document;
+        const cv = doc.createElement('canvas');
+        cv.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;pointer-events:none;z-index:99999';
+        cv.width = window.parent.innerWidth; cv.height = window.parent.innerHeight;
+        doc.body.appendChild(cv);
+        const ctx = cv.getContext('2d');
+        const colors = ['#7aa2f7','#bb9af7','#9ece6a','#ff9e64','#f7768e','#e0af68'];
+        const parts = [];
+        // Two cracker bursts from the lower corners
+        [[0.15,1],[0.85,1]].forEach(([fx,fy]) => {
+            for (let i=0;i<90;i++){
+                const a = (Math.random()*Math.PI/2) + (fx<0.5?-Math.PI/2:Math.PI) ;
+                const sp = 9 + Math.random()*9;
+                parts.push({
+                    x: fx*cv.width, y: fy*cv.height,
+                    vx: Math.cos(a)*sp + (fx<0.5?6:-6),
+                    vy: -Math.abs(Math.sin(a)*sp) - 6,
+                    s: 5+Math.random()*6, c: colors[(Math.random()*colors.length)|0],
+                    rot: Math.random()*6.28, vr:(Math.random()-0.5)*0.4, life: 1
+                });
+            }
+        });
+        let frame = 0;
+        (function anim(){
+            ctx.clearRect(0,0,cv.width,cv.height);
+            parts.forEach(p => {
+                p.vy += 0.28; p.x += p.vx; p.y += p.vy; p.rot += p.vr; p.life -= 0.008;
+                ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.rot);
+                ctx.globalAlpha = Math.max(0,p.life); ctx.fillStyle = p.c;
+                ctx.fillRect(-p.s/2,-p.s/2,p.s,p.s*0.6); ctx.restore();
+            });
+            frame++;
+            if (frame < 150) requestAnimationFrame(anim); else cv.remove();
+        })();
+        """
+    else:
+        js = """
+        const doc = window.parent.document;
+        const el = doc.createElement('div');
+        el.textContent = '👎';
+        el.style.cssText = 'position:fixed;top:42%;left:-160px;font-size:130px;z-index:99999;'
+            + 'pointer-events:none;filter:drop-shadow(0 6px 18px rgba(0,0,0,.5));'
+            + 'transition:none;transform-origin:center';
+        doc.body.appendChild(el);
+        const start = performance.now(); const dur = 2600;
+        const W = window.parent.innerWidth + 320;
+        (function anim(t){
+            const k = Math.min(1,(t-start)/dur);
+            const x = -160 + k*W;
+            const wave = Math.sin(k*Math.PI*8)*22;     // up-down waving
+            const tilt = Math.sin(k*Math.PI*8)*18;     // rocking tilt
+            el.style.left = x + 'px';
+            el.style.transform = 'translateY(' + wave + 'px) rotate(' + tilt + 'deg)';
+            if (k < 1) requestAnimationFrame(anim); else el.remove();
+        })(start);
+        """
+    components.html(f"<script>{js}</script>", height=0)
+
+
 # ── Main tabs ──────────────────────────────────────────────────────────────────
 tab_drill, tab_stats = st.tabs(["⚡  Drill", "📊  Stats"])
 
@@ -732,6 +801,8 @@ with tab_drill:
             st.session_state.grade_result = result
             st.session_state.graded = True
             st.session_state.elapsed = elapsed_at_submit
+            # One-shot animation trigger (consumed once in the result block)
+            st.session_state.animate = "pass" if result["passed"] else "fail"
 
             if not result["passed"]:
                 st.session_state.fail_count += 1
@@ -762,6 +833,11 @@ with tab_drill:
         # ── Grade result ──────────────────────────────────────────────────────
         gr = st.session_state.grade_result
         if gr:
+            # One-shot celebration / commiseration animation
+            if st.session_state.animate:
+                play_animation(st.session_state.animate)
+                st.session_state.animate = None
+
             if gr["passed"]:
                 st.markdown(
                     f"""<div class="result-pass">
