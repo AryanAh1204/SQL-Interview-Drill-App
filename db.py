@@ -100,19 +100,24 @@ def compare_results(
         except Exception:
             pass
 
+    # Make NULLs comparable: NaN != NaN, so fill both frames with a sentinel that
+    # cannot collide with real data. Done AFTER sorting (filling earlier upcasts
+    # columns to object and can break sort_values).
+    _NULL = "␀NULL␀"
+    ref_sub = ref_sub.fillna(_NULL)
+    user_sub = user_sub.fillna(_NULL)
+
     if len(ref_sub) != len(user_sub):
         return False, (
             f"Wrong row count: expected {len(ref_sub)}, got {len(user_sub)}"
         )
 
-    # Row-by-row comparison
+    # Row-by-row comparison (on the filled frames)
     for i, (r_row, u_row) in enumerate(zip(ref_sub.itertuples(index=False), user_sub.itertuples(index=False))):
         if r_row != u_row:
-            col = ref_sub.columns[
-                next(j for j, (a, b) in enumerate(zip(r_row, u_row)) if a != b)
-            ]
-            exp_val = getattr(r_row, col.replace(" ", "_"))
-            got_val = getattr(u_row, col.replace(" ", "_"))
+            j = next(idx for idx, (a, b) in enumerate(zip(r_row, u_row)) if a != b)
+            col = ref_sub.columns[j]
+            exp_val, got_val = r_row[j], u_row[j]
             return False, (
                 f"Value mismatch at row {i+1}, column '{col}': "
                 f"expected {exp_val!r}, got {got_val!r}"
