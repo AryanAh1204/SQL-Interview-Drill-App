@@ -83,6 +83,11 @@ html, body, [class*="css"] {
     background: #0d0e1c !important;
     border-right: 1px solid #2a2d3e !important;
 }
+/* Pull sidebar content flush to the very top (kill Streamlit's default gap). */
+[data-testid="stSidebar"] > div:first-child { padding-top: 0 !important; }
+[data-testid="stSidebarHeader"] { padding-top: 0.4rem !important; padding-bottom: 0 !important; min-height: 0 !important; }
+[data-testid="stSidebarUserContent"] { padding-top: 0.4rem !important; }
+[data-testid="stSidebar"] .block-container { padding-top: 0.4rem !important; }
 [data-testid="stSidebar"] * { color: #c0caf5 !important; }
 [data-testid="stSidebar"] .stSelectbox label,
 [data-testid="stSidebar"] .stRadio label,
@@ -408,6 +413,49 @@ hr {
 ::-webkit-scrollbar-thumb { background: #2a2d3e; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #7aa2f7; }
 
+/* ── 3D logo emblem (app-icon style: glossy gradient tile + beveled bolt) ── */
+.logo-badge {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 30%;
+    background: linear-gradient(150deg, #9fbcff 0%, #7aa2f7 30%, #bb9af7 66%, #9ece6a 100%);
+    box-shadow:
+        0 12px 24px rgba(0,0,0,0.5),
+        0 3px 8px rgba(122,162,247,0.55),
+        inset 0 2px 3px rgba(255,255,255,0.6),
+        inset 0 -5px 10px rgba(40,30,90,0.45);
+    animation: logoFloat 3.6s ease-in-out infinite;
+    transition: box-shadow 0.3s ease, filter 0.3s ease;
+}
+/* Glossy diagonal sheen across the top half. */
+.logo-badge::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(158deg, rgba(255,255,255,0.45) 0%, rgba(255,255,255,0.05) 42%, transparent 60%);
+    pointer-events: none;
+}
+.logo-badge svg {
+    position: relative;
+    z-index: 1;
+    filter: drop-shadow(0 2px 2px rgba(15,15,35,0.55));
+}
+.logo-badge:hover {
+    box-shadow:
+        0 18px 32px rgba(0,0,0,0.55),
+        0 5px 16px rgba(122,162,247,0.7),
+        inset 0 2px 3px rgba(255,255,255,0.65),
+        inset 0 -5px 10px rgba(40,30,90,0.45);
+    filter: brightness(1.08);
+}
+@keyframes logoFloat {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-5px); }
+}
+
 /* ── Cursor glow trail (large ambient light that lights up the background) ── */
 #cursor-glow {
     pointer-events: none;
@@ -445,6 +493,23 @@ components.html(
     """,
     height=0,
 )
+
+
+# ── 3D logo emblem ──────────────────────────────────────────────────────────────
+def logo_emblem(size: int = 46) -> str:
+    """Return HTML for the glossy, beveled app-icon-style lightning emblem.
+
+    Renders a gradient tile (.logo-badge) with a dark, depth-shadowed bolt — used
+    in both the sidebar and the sign-in header so the brand mark stays consistent.
+    """
+    bolt = round(size * 0.56)
+    return (
+        f'<span class="logo-badge" style="width:{size}px;height:{size}px;">'
+        f'<svg viewBox="0 0 24 24" width="{bolt}" height="{bolt}" '
+        f'xmlns="http://www.w3.org/2000/svg">'
+        f'<path d="M14 1.8 L4.5 13.6 H10.4 L8.9 22.2 L19.5 9.6 H12.7 L14 1.8 Z" '
+        f'fill="#10122a"/></svg></span>'
+    )
 
 
 # ── Session state init ─────────────────────────────────────────────────────────
@@ -520,8 +585,8 @@ client = anthropic.Anthropic(api_key=api_key) if api_key else None
 # ── Sign-in gate ───────────────────────────────────────────────────────────────
 def render_login():
     st.markdown(
-        """<div style="text-align:center; padding:2rem 0 1rem 0;">
-            <span style="font-size:3rem;">⚡</span>
+        f"""<div style="text-align:center; padding:2rem 0 1rem 0;">
+            <div style="margin-bottom:0.7rem;">{logo_emblem(64)}</div>
             <div style="font-size:1.8rem; font-weight:700;
                 background:linear-gradient(135deg,#7aa2f7,#bb9af7);
                 -webkit-background-clip:text; -webkit-text-fill-color:transparent;
@@ -585,9 +650,9 @@ def get_schema(ds_id: str) -> dict:
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("""
-    <div style="text-align:center; padding: 0.5rem 0 0.6rem 0;">
-        <span style="font-size:2.2rem;">⚡</span>
+    st.markdown(f"""
+    <div style="text-align:center; padding: 0.4rem 0 0.6rem 0;">
+        <div style="margin-bottom:0.5rem;">{logo_emblem(48)}</div>
         <div style="font-size:1.3rem; font-weight:700;
             background:linear-gradient(135deg,#7aa2f7,#bb9af7);
             -webkit-background-clip:text; -webkit-text-fill-color:transparent;
