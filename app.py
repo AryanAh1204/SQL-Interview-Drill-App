@@ -847,7 +847,31 @@ with tab_drill:
         # ── Submit ────────────────────────────────────────────────────────────
         submit_col, _ = st.columns([1, 3])
         with submit_col:
-            submit_clicked = st.button("▶ Submit Answer", use_container_width=True, key="submit")
+            submit_clicked = st.button(
+                "▶ Submit Answer  ·  ⌘/Ctrl+↵",
+                use_container_width=True,
+                key="submit",
+            )
+
+        # Keyboard shortcut: Ctrl+Enter (Win/Linux) or Cmd+Enter (Mac) submits.
+        components.html(
+            """
+            <script>
+            const doc = window.parent.document;
+            if (!doc.__sqlDrillSubmitKey) {
+                doc.__sqlDrillSubmitKey = true;
+                doc.addEventListener('keydown', function (e) {
+                    if ((e.ctrlKey || e.metaKey) && (e.key === 'Enter' || e.keyCode === 13)) {
+                        const btn = Array.from(doc.querySelectorAll('button'))
+                            .find(b => b.innerText && b.innerText.includes('Submit Answer'));
+                        if (btn) { e.preventDefault(); e.stopPropagation(); btn.click(); }
+                    }
+                }, true);
+            }
+            </script>
+            """,
+            height=0,
+        )
 
         if submit_clicked and user_sql and user_sql.strip():
             elapsed_at_submit = time.time() - st.session_state.start_time if st.session_state.start_time else 0
