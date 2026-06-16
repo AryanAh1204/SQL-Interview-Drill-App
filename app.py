@@ -577,6 +577,10 @@ with st.sidebar:
 
     # Sound + animation effects toggle
     effects_on = st.toggle("🔊 Sound & animation", value=True)
+    if effects_on:
+        volume_pct = st.slider("Volume", 0, 100, 90, 5)
+    else:
+        volume_pct = 0
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
@@ -616,20 +620,22 @@ def _load_sound(kind: str):
     return None
 
 
-def play_animation(kind: str):
+def play_animation(kind: str, volume: float = 0.9):
     """Fire a one-shot full-screen animation onto the parent document.
 
     kind == 'pass' -> confetti crackers burst.
     kind == 'fail' -> a big thumbs-down waves across the screen.
+    volume -> 0.0–1.0 master volume for the sound effect.
 
     Sound: plays a bundled audio file (assets/sounds/correct|wrong.*) if present,
     otherwise falls back to a synthesized Web Audio cue.
     """
+    vol = max(0.0, min(1.0, float(volume)))
     sound_url = _load_sound(kind)
     if sound_url:
         sound_js = (
             "try { const a = new (window.parent || window).Audio('" + sound_url + "');"
-            " a.volume = 0.9; a.play().catch(()=>{}); } catch (e) {}"
+            f" a.volume = {vol}; a.play().catch(()=>{{}}); }} catch (e) {{}}"
         )
     else:
         sound_js = None
@@ -647,7 +653,7 @@ def play_animation(kind: str):
                 o.type = 'triangle'; o.frequency.value = f;
                 const hold = (i === notes.length - 1) ? 0.55 : 0.16;
                 g.gain.setValueAtTime(0.0001, t);
-                g.gain.exponentialRampToValueAtTime(0.32, t + 0.02);
+                g.gain.exponentialRampToValueAtTime(Math.max(0.0002, 0.36*__VOL__), t + 0.02);
                 g.gain.exponentialRampToValueAtTime(0.0001, t + hold);
                 o.connect(g).connect(ac.destination);
                 o.start(t); o.stop(t + hold + 0.05);
@@ -671,7 +677,7 @@ def play_animation(kind: str):
                 o.frequency.setValueAtTime(f * 1.06, t);
                 o.frequency.exponentialRampToValueAtTime(f, t + 0.12);
                 g.gain.setValueAtTime(0.0001, t);
-                g.gain.exponentialRampToValueAtTime(0.28, t + 0.04);
+                g.gain.exponentialRampToValueAtTime(Math.max(0.0002, 0.32*__VOL__), t + 0.04);
                 g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
                 o.connect(lp).connect(g).connect(ac.destination);
                 o.start(t); o.stop(t + dur + 0.05);
@@ -740,6 +746,7 @@ def play_animation(kind: str):
             if (k < 1) requestAnimationFrame(anim); else el.remove();
         })(start);
         """
+    js = js.replace("__VOL__", str(vol))
     components.html(f"<script>{js}</script>", height=0)
 
 
@@ -982,7 +989,7 @@ with tab_drill:
             # One-shot celebration / commiseration animation (if effects enabled)
             if st.session_state.animate:
                 if effects_on:
-                    play_animation(st.session_state.animate)
+                    play_animation(st.session_state.animate, volume=volume_pct / 100)
                 st.session_state.animate = None
 
             if gr["passed"]:
