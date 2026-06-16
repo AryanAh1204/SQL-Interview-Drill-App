@@ -26,6 +26,22 @@ def test_order_sensitive_wrong_order_fails():
     assert passed is False
 
 
+def test_different_headers_same_rows_passes():
+    # User aliased columns differently but the data is identical -> should pass.
+    ref = pd.DataFrame({"FullName": ["a", "b"], "TotalSpent": [10.0, 20.0]})
+    user = pd.DataFrame({"name": ["a", "b"], "total": [10.0, 20.0]})
+    passed, reason = compare_results(ref, user, ["FullName", "TotalSpent"], order_matters=True)
+    assert passed is True, reason
+
+
+def test_wrong_column_count_fails():
+    ref = pd.DataFrame({"FullName": ["a", "b"], "TotalSpent": [10.0, 20.0]})
+    user = pd.DataFrame({"name": ["a", "b"]})  # only one column
+    passed, reason = compare_results(ref, user, ["FullName", "TotalSpent"], order_matters=True)
+    assert passed is False
+    assert reason
+
+
 def test_reporter_no_crash_on_nonidentifier_column():
     # Column name with a leading digit and a space -> itertuples renames it positionally.
     ref = pd.DataFrame({"country": ["x", "y"], "2024 gdp": [100, 200]})

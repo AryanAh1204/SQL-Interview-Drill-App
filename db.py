@@ -70,28 +70,36 @@ def compare_results(
     required_cols: list[str],
     order_matters: bool,
 ) -> tuple[bool, str]:
-    # Column presence check (case-insensitive)
-    user_cols_lower = {c.lower() for c in user_df.columns}
-    missing = [c for c in required_cols if c.lower() not in user_cols_lower]
-    if missing:
-        return False, f"Missing required column(s): {', '.join(missing)}"
-
-    # Align to required_cols (case-insensitive column selection)
-    col_map = {c.lower(): c for c in user_df.columns}
+    # Reference is projected to the required answer columns.
     ref_map = {c.lower(): c for c in ref_df.columns}
+    ref_cols = [ref_map[c.lower()] for c in required_cols if c.lower() in ref_map]
+    ref_sub = ref_df[ref_cols]
 
-    try:
-        ref_sub = ref_df[[ref_map[c.lower()] for c in required_cols if c.lower() in ref_map]]
-        user_sub = user_df[[col_map[c.lower()] for c in required_cols if c.lower() in col_map]]
-    except KeyError as e:
-        return False, f"Column mapping error: {e}"
+    # Select the user's columns by DATA, not header names:
+    #   1) if the user's headers happen to match the required names, use those;
+    #   2) otherwise, if the user returned the same number of columns, compare
+    #      positionally so a correct result with different aliases still passes.
+    user_cols_lower = {c.lower() for c in user_df.columns}
+    if all(c.lower() in user_cols_lower for c in required_cols):
+        col_map = {c.lower(): c for c in user_df.columns}
+        user_sub = user_df[[col_map[c.lower()] for c in required_cols]]
+    elif len(user_df.columns) == len(ref_cols):
+        user_sub = user_df  # header-agnostic positional comparison
+    else:
+        return False, (
+            f"Wrong number of columns: expected {len(ref_cols)} "
+            f"({', '.join(required_cols)}), got {len(user_df.columns)}"
+        )
 
     ref_sub = _round_floats(ref_sub.reset_index(drop=True))
     user_sub = _round_floats(user_sub.reset_index(drop=True))
 
-    # Normalise column names to lowercase for comparison
-    ref_sub.columns = [c.lower() for c in ref_sub.columns]
-    user_sub.columns = [c.lower() for c in user_sub.columns]
+    # Keep the reference's real column names for error messages, but compare on
+    # canonical positional names so headers are ignored entirely.
+    ref_display = list(ref_sub.columns)
+    canon = [f"c{i}" for i in range(len(ref_sub.columns))]
+    ref_sub.columns = canon
+    user_sub.columns = canon
 
     if not order_matters:
         try:
@@ -116,7 +124,7 @@ def compare_results(
     for i, (r_row, u_row) in enumerate(zip(ref_sub.itertuples(index=False), user_sub.itertuples(index=False))):
         if r_row != u_row:
             j = next(idx for idx, (a, b) in enumerate(zip(r_row, u_row)) if a != b)
-            col = ref_sub.columns[j]
+            col = ref_display[j]
             exp_val, got_val = r_row[j], u_row[j]
             return False, (
                 f"Value mismatch at row {i+1}, column '{col}': "
