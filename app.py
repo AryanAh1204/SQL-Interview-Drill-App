@@ -363,8 +363,17 @@ with st.sidebar:
     )
     for table, cols in schema.items():
         with st.expander(f"🗂 {table}", expanded=False):
-            col_text = "\n".join(f"• `{c}` — {t}" for c, t in cols)
-            st.markdown(col_text)
+            rows = "".join(
+                f"<tr>"
+                f"<td style='padding:3px 10px 3px 0; color:#c0caf5; font-size:0.78rem; white-space:nowrap;'>{c}</td>"
+                f"<td style='padding:3px 0; color:#565f89; font-size:0.7rem; text-align:right;'>{t}</td>"
+                f"</tr>"
+                for c, t in cols
+            )
+            st.markdown(
+                f"<table style='width:100%; border-collapse:collapse;'>{rows}</table>",
+                unsafe_allow_html=True,
+            )
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
