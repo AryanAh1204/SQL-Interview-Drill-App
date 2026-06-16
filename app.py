@@ -854,20 +854,39 @@ with tab_drill:
             )
 
         # Keyboard shortcut: Ctrl+Enter (Win/Linux) or Cmd+Enter (Mac) submits.
+        # The Ace editor lives in its own iframe, so we install the listener on the
+        # parent document AND every same-origin iframe document (incl. the editor),
+        # rescanning periodically to catch iframes that mount after this runs.
         components.html(
             """
             <script>
-            const doc = window.parent.document;
-            if (!doc.__sqlDrillSubmitKey) {
-                doc.__sqlDrillSubmitKey = true;
-                doc.addEventListener('keydown', function (e) {
+            (function () {
+                const parent = window.parent;
+                const pdoc = parent.document;
+                function clickSubmit() {
+                    const btn = Array.from(pdoc.querySelectorAll('button'))
+                        .find(b => b.innerText && b.innerText.includes('Submit Answer'));
+                    if (btn) { btn.click(); }
+                }
+                function handler(e) {
                     if ((e.ctrlKey || e.metaKey) && (e.key === 'Enter' || e.keyCode === 13)) {
-                        const btn = Array.from(doc.querySelectorAll('button'))
-                            .find(b => b.innerText && b.innerText.includes('Submit Answer'));
-                        if (btn) { e.preventDefault(); e.stopPropagation(); btn.click(); }
+                        e.preventDefault(); e.stopPropagation();
+                        clickSubmit();
                     }
-                }, true);
-            }
+                }
+                function attach(d) {
+                    if (!d || d.__sqlDrillKey) return;
+                    try { d.addEventListener('keydown', handler, true); d.__sqlDrillKey = true; } catch (err) {}
+                }
+                function scan() {
+                    attach(pdoc);
+                    pdoc.querySelectorAll('iframe').forEach(function (f) {
+                        try { attach(f.contentDocument); } catch (err) {}
+                    });
+                }
+                scan();
+                setInterval(scan, 800);
+            })();
             </script>
             """,
             height=0,
