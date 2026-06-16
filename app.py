@@ -89,6 +89,70 @@ html, body, [class*="css"] {
 [data-testid="stSidebarUserContent"] { padding-top: 0.4rem !important; }
 [data-testid="stSidebar"] .block-container { padding-top: 0.4rem !important; }
 [data-testid="stSidebar"] * { color: #c0caf5 !important; }
+
+/* ── Sidebar schema dropdown tree (native <details>) ── */
+details.schema-dd { margin: 0.2rem 0 0.4rem 0; }
+details.schema-dd > summary,
+details.schema-table > summary {
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+details.schema-dd > summary::-webkit-details-marker,
+details.schema-table > summary::-webkit-details-marker { display: none; }
+/* Outer "N tables" dropdown header */
+details.schema-dd > summary {
+    padding: 0.5rem 0.8rem;
+    background: #1a1b2e;
+    border: 1px solid #2a2d3e;
+    border-radius: 8px;
+    color: #7aa2f7 !important;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    transition: border-color 0.2s, background 0.25s, box-shadow 0.25s;
+}
+details.schema-dd > summary::after {
+    content: "▾";
+    margin-left: auto;
+    color: #565f89;
+    transition: transform 0.25s;
+}
+details.schema-dd[open] > summary::after { transform: rotate(180deg); }
+details.schema-dd > summary:hover {
+    border-color: #7aa2f7;
+    background: linear-gradient(135deg, #1a1b2e, #232544);
+    box-shadow: 0 0 14px #7aa2f740;
+}
+.schema-body { padding: 0.4rem 0 0.1rem 0.3rem; }
+/* Inner per-table dropdown */
+details.schema-table { margin: 0.15rem 0; }
+details.schema-table > summary {
+    padding: 0.32rem 0.6rem;
+    border-left: 2px solid #2a2d3e;
+    border-radius: 0 6px 6px 0;
+    color: #c0caf5 !important;
+    font-size: 0.76rem;
+    transition: background 0.15s, border-color 0.15s, padding-left 0.15s;
+}
+details.schema-table > summary::after {
+    content: "▸";
+    margin-left: auto;
+    color: #565f89;
+    transition: transform 0.2s;
+}
+details.schema-table[open] > summary::after { transform: rotate(90deg); }
+details.schema-table > summary:hover {
+    background: #7aa2f712;
+    border-left-color: #7aa2f7;
+    padding-left: 0.85rem;
+}
+details.schema-table[open] > summary { color: #7aa2f7 !important; border-left-color: #7aa2f7; }
+.schema-cols { margin: 0.1rem 0 0.35rem 0.9rem; }
+
 [data-testid="stSidebar"] .stSelectbox label,
 [data-testid="stSidebar"] .stRadio label,
 [data-testid="stSidebar"] .stSlider label {
@@ -688,33 +752,33 @@ with st.sidebar:
         format_func=lambda x: ds_labels[x],
     )
 
-    # Tables list for the dataset. Each table is its own expander; we use a plain
-    # section header (not an outer expander) because Streamlit forbids nesting
-    # expanders inside expanders.
+    # Tables browser — an outer dropdown the table list drops down from, with each
+    # table a nested dropdown of its columns. Built as native HTML <details> so it
+    # can nest freely (Streamlit's st.expander cannot nest inside another expander).
     schema = get_schema(selected_ds)
     ds_meta_side = DATASETS[selected_ds]
+    tables_html = ""
+    for table, cols in schema.items():
+        rows = "".join(
+            f"<tr>"
+            f"<td style='padding:2px 8px 2px 0; color:#c0caf5; font-size:0.74rem; white-space:nowrap;'>{c}</td>"
+            f"<td style='padding:2px 0; color:#565f89; font-size:0.68rem; text-align:right;'>{t}</td>"
+            f"</tr>"
+            for c, t in cols
+        )
+        tables_html += (
+            f"<details class='schema-table'>"
+            f"<summary>🗂 {table}</summary>"
+            f"<table class='schema-cols' style='width:100%; border-collapse:collapse;'>{rows}</table>"
+            f"</details>"
+        )
     st.markdown(
-        f"""<div style="display:flex; align-items:center; gap:0.4rem;
-            font-size:0.74rem; letter-spacing:0.08em; text-transform:uppercase;
-            color:#7aa2f7; font-weight:700; margin:0.2rem 0 0.4rem 0;">
-            {ds_meta_side['emoji']} {selected_ds.title()}
-            <span style="color:#565f89; font-weight:500; letter-spacing:0.04em;">· {len(schema)} tables</span>
-        </div>""",
+        f"""<details class="schema-dd" open>
+            <summary>{ds_meta_side['emoji']} {selected_ds.title()} · {len(schema)} tables</summary>
+            <div class="schema-body">{tables_html}</div>
+        </details>""",
         unsafe_allow_html=True,
     )
-    for table, cols in schema.items():
-        with st.expander(f"🗂 {table}", expanded=False):
-            rows = "".join(
-                f"<tr>"
-                f"<td style='padding:3px 10px 3px 0; color:#c0caf5; font-size:0.78rem; white-space:nowrap;'>{c}</td>"
-                f"<td style='padding:3px 0; color:#565f89; font-size:0.7rem; text-align:right;'>{t}</td>"
-                f"</tr>"
-                for c, t in cols
-            )
-            st.markdown(
-                f"<table style='width:100%; border-collapse:collapse;'>{rows}</table>",
-                unsafe_allow_html=True,
-            )
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
