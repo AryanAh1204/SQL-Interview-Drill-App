@@ -337,17 +337,6 @@ hr { border-color: #2a2d3e !important; }
     mix-blend-mode: screen;
     filter: blur(8px);
 }
-/* Small sharp dot right at the cursor tip */
-#cursor-dot {
-    pointer-events: none;
-    position: fixed;
-    width: 16px; height: 16px;
-    border-radius: 50%;
-    background: radial-gradient(circle, #7aa2f790, transparent 70%);
-    transform: translate(-50%, -50%);
-    z-index: 9999;
-    mix-blend-mode: screen;
-}
 </style>
 
 """, unsafe_allow_html=True)
@@ -364,14 +353,9 @@ components.html(
         const glow = doc.createElement('div');
         glow.id = 'cursor-glow';
         doc.body.appendChild(glow);
-        const dot = doc.createElement('div');
-        dot.id = 'cursor-dot';
-        doc.body.appendChild(dot);
         doc.addEventListener('mousemove', e => {
             glow.style.left = e.clientX + 'px';
             glow.style.top  = e.clientY + 'px';
-            dot.style.left  = e.clientX + 'px';
-            dot.style.top   = e.clientY + 'px';
         });
     }
     </script>
