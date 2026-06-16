@@ -16,11 +16,13 @@ load_dotenv()
 
 from bank import load_bank, pick_question
 from datasets import DATASETS, ensure_datasets
-from db import get_connection, introspect_schema, safe_execute
+from db import get_connection, introspect_schema, result_diff, safe_execute
 from generator import TOPICS
 from grader import get_style_feedback, grade
 from storage import (
+    get_daily_stats,
     get_stats,
+    get_streak,
     get_weakest_topic,
     log_attempt,
     login_user,
@@ -1017,6 +1019,29 @@ with tab_drill:
                     unsafe_allow_html=True,
                 )
 
+                # Result diff — teach what's off without leaking the answer early.
+                diff = result_diff(
+                    st.session_state.ref_df, gr["user_df"], q["required_columns"]
+                )
+                cA, cB = st.columns(2)
+                cA.metric("Expected rows", diff["expected_rows"])
+                cB.metric("Your rows", diff["your_rows"])
+                if diff["aligned"]:
+                    st.caption(
+                        f"🧩 {len(diff['missing'])} expected row(s) missing · "
+                        f"{len(diff['extra'])} unexpected row(s) in your result."
+                    )
+                    # Row-level values unlock alongside the reference (after 2 fails).
+                    if st.session_state.fail_count >= 2:
+                        if len(diff["missing"]) > 0:
+                            st.markdown("**Rows you're missing** (in the expected answer):")
+                            st.dataframe(diff["missing"].head(20), use_container_width=True)
+                        if len(diff["extra"]) > 0:
+                            st.markdown("**Extra rows you returned** (not in the expected answer):")
+                            st.dataframe(diff["extra"].head(20), use_container_width=True)
+                else:
+                    st.caption(f"🧩 {diff['summary']}")
+
             # Reveal answer (unlocked after 2 failures)
             if st.session_state.fail_count >= 2:
                 with st.expander(
@@ -1051,6 +1076,17 @@ with tab_drill:
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_stats:
     st.markdown(f"<h2>📊 {username.title()}'s Progress</h2>", unsafe_allow_html=True)
+
+    # ── Streaks ────────────────────────────────────────────────────────────────
+    streak = get_streak(username)
+    DAILY_GOAL = 5
+    s1, s2, s3 = st.columns(3)
+    s1.metric("🔥 Current streak", f"{streak['current']} day{'s' if streak['current'] != 1 else ''}")
+    s2.metric("🏆 Best streak", f"{streak['best']} day{'s' if streak['best'] != 1 else ''}")
+    s3.metric(
+        f"🎯 Today ({streak['today']}/{DAILY_GOAL})",
+        "Goal met! ✅" if streak["today"] >= DAILY_GOAL else f"{DAILY_GOAL - streak['today']} to go",
+    )
 
     stats_df = get_stats(username)
     weakest = get_weakest_topic(username)
@@ -1091,6 +1127,19 @@ with tab_stats:
         st.markdown("<h3>Pass Rate by Topic</h3>", unsafe_allow_html=True)
         chart_df = stats_df.set_index("topic")[["pass_rate"]].rename(columns={"pass_rate": "Pass Rate %"})
         st.bar_chart(chart_df)
+
+        # Trend over time
+        daily = get_daily_stats(username)
+        if len(daily) >= 2:
+            st.markdown("<h3>Accuracy Over Time</h3>", unsafe_allow_html=True)
+            acc = daily.set_index("day")[["pass_rate"]].rename(columns={"pass_rate": "Pass Rate %"})
+            st.line_chart(acc, color="#9ece6a")
+
+            st.markdown("<h3>Practice Volume</h3>", unsafe_allow_html=True)
+            vol = daily.set_index("day")[["attempts", "passed"]].rename(
+                columns={"attempts": "Attempts", "passed": "Passed"}
+            )
+            st.bar_chart(vol, color=["#7aa2f7", "#9ece6a"])
 
         # Per-dataset breakdown
         st.markdown("<h3>Attempts by Dataset</h3>", unsafe_allow_html=True)

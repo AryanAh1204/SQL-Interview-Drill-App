@@ -161,6 +161,68 @@ def get_stats(username: str) -> pd.DataFrame:
     return df
 
 
+def get_daily_stats(username: str) -> pd.DataFrame:
+    """Per-day attempts, passes, pass-rate %, and avg time for charting."""
+    conn = _get_conn()
+    df = pd.read_sql_query(
+        """
+        SELECT
+            substr(timestamp, 1, 10) AS day,
+            COUNT(*)                 AS attempts,
+            SUM(passed)              AS passed,
+            ROUND(AVG(passed) * 100, 1) AS pass_rate,
+            ROUND(AVG(time_seconds), 1) AS avg_time_seconds
+        FROM attempts
+        WHERE username = ?
+        GROUP BY day
+        ORDER BY day
+        """,
+        conn,
+        params=(username,),
+    )
+    conn.close()
+    return df
+
+
+def get_streak(username: str) -> dict:
+    """Return {'current': int, 'best': int, 'today': int} from attempt days."""
+    from datetime import date, timedelta
+
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT DISTINCT substr(timestamp, 1, 10) FROM attempts WHERE username = ?",
+        (username,),
+    ).fetchall()
+    today_count = conn.execute(
+        "SELECT COUNT(*) FROM attempts WHERE username = ? "
+        "AND substr(timestamp, 1, 10) = ?",
+        (username, date.today().isoformat()),
+    ).fetchone()[0]
+    conn.close()
+
+    days = sorted({date.fromisoformat(r[0]) for r in rows if r[0]})
+    if not days:
+        return {"current": 0, "best": 0, "today": 0}
+
+    # Best streak: longest run of consecutive calendar days.
+    best = run = 1
+    for prev, cur in zip(days, days[1:]):
+        run = run + 1 if (cur - prev).days == 1 else 1
+        best = max(best, run)
+
+    # Current streak: consecutive days ending today or yesterday.
+    today = date.today()
+    current = 0
+    if days[-1] in (today, today - timedelta(days=1)):
+        current = 1
+        for prev, cur in zip(reversed(days), reversed(days[:-1])):
+            if (prev - cur).days == 1:
+                current += 1
+            else:
+                break
+    return {"current": current, "best": best, "today": today_count}
+
+
 def get_weakest_topic(username: str) -> tuple[str, str] | None:
     conn = _get_conn()
     row = conn.execute(

@@ -144,3 +144,71 @@ def compare_results(
             return True, reason
         last_reason = reason
     return False, last_reason
+
+
+def result_diff(
+    ref_df: pd.DataFrame,
+    user_df: pd.DataFrame,
+    required_cols: list[str],
+) -> dict:
+    """Compare result sets and return a structured diff for teaching on failure.
+
+    Returns: {
+        aligned: bool,                  # could we line up the columns?
+        expected_rows, your_rows: int,
+        missing: DataFrame,             # rows in the expected set you didn't return
+        extra: DataFrame,               # rows you returned that aren't expected
+        summary: str,
+    }
+    """
+    ref_map = {c.lower(): c for c in ref_df.columns}
+    ref_cols = [ref_map[c.lower()] for c in required_cols if c.lower() in ref_map]
+    ref_sub = ref_df[ref_cols]
+    k = len(ref_cols)
+
+    # Align the user's columns the same way grading does.
+    user_cols_lower = {c.lower() for c in user_df.columns}
+    if user_df is None:
+        user_sub = None
+    elif all(c.lower() in user_cols_lower for c in required_cols):
+        col_map = {c.lower(): c for c in user_df.columns}
+        user_sub = user_df[[col_map[c.lower()] for c in required_cols]]
+    elif len(user_df.columns) == k:
+        user_sub = user_df
+    else:
+        # Can't line columns up — only a count-level summary is meaningful.
+        return {
+            "aligned": False,
+            "expected_rows": len(ref_sub),
+            "your_rows": 0 if user_df is None else len(user_df),
+            "missing": ref_sub.head(0),
+            "extra": ref_sub.head(0),
+            "summary": (
+                f"Expected {k} column(s) ({', '.join(required_cols)}); "
+                f"you returned {0 if user_df is None else len(user_df.columns)}."
+            ),
+        }
+
+    ref_n = _normalise(ref_sub, order_matters=False)
+    user_n = _normalise(user_sub, order_matters=False)
+    merged = ref_n.merge(user_n, how="outer", indicator=True)
+    missing = merged[merged["_merge"] == "left_only"].drop(columns="_merge")
+    extra = merged[merged["_merge"] == "right_only"].drop(columns="_merge")
+
+    # Restore readable names + NULL labels for display.
+    def _pretty(df):
+        df = df.copy()
+        df.columns = list(ref_cols)
+        return df.replace(_NULL_SENTINEL, "NULL")
+
+    return {
+        "aligned": True,
+        "expected_rows": len(ref_sub),
+        "your_rows": len(user_sub),
+        "missing": _pretty(missing),
+        "extra": _pretty(extra),
+        "summary": (
+            f"Expected {len(ref_sub)} rows; you returned {len(user_sub)}. "
+            f"{len(missing)} expected row(s) missing, {len(extra)} unexpected row(s)."
+        ),
+    }
