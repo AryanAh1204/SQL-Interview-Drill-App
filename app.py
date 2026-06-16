@@ -11,7 +11,13 @@ from datasets import DATASETS, ensure_datasets
 from db import get_connection, introspect_schema
 from generator import TOPICS, generate_question
 from grader import get_style_feedback, grade
-from storage import get_stats, get_weakest_topic, log_attempt
+from storage import (
+    get_stats,
+    get_weakest_topic,
+    log_attempt,
+    login_user,
+    register_user,
+)
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -61,7 +67,9 @@ h3 { color: #9ece6a !important; }
 
 /* ── Buttons ── */
 .stButton > button {
-    background: linear-gradient(135deg, #7aa2f7, #bb9af7) !important;
+    background: linear-gradient(135deg, #7aa2f7, #bb9af7, #9ece6a) !important;
+    background-size: 200% 200% !important;
+    background-position: 0% 50% !important;
     color: #0f0f23 !important;
     border: none !important;
     border-radius: 8px !important;
@@ -69,12 +77,13 @@ h3 { color: #9ece6a !important; }
     font-weight: 700 !important;
     letter-spacing: 0.05em !important;
     padding: 0.5rem 1.4rem !important;
-    transition: all 0.2s ease !important;
+    transition: background-position 0.6s ease, transform 0.2s ease, box-shadow 0.2s ease !important;
     box-shadow: 0 0 0px transparent !important;
 }
 .stButton > button:hover {
+    background-position: 100% 50% !important;
     transform: translateY(-2px) scale(1.03) !important;
-    box-shadow: 0 0 22px #7aa2f770, 0 4px 16px #00000060 !important;
+    box-shadow: 0 0 26px #7aa2f790, 0 0 50px #bb9af740, 0 4px 16px #00000060 !important;
     cursor: pointer !important;
 }
 .stButton > button:active {
@@ -114,18 +123,38 @@ h3 { color: #9ece6a !important; }
 
 /* ── Cards (custom HTML divs) ── */
 .drill-card {
+    position: relative;
     background: #1a1b2e;
     border: 1px solid #2a2d3e;
     border-radius: 12px;
     padding: 1.4rem 1.6rem;
     margin-bottom: 1rem;
-    transition: border-color 0.25s, transform 0.25s, box-shadow 0.25s;
+    overflow: hidden;
+    transition: border-color 0.25s, transform 0.25s, box-shadow 0.25s, background 0.4s;
     animation: slideIn 0.4s ease;
 }
+/* Animated gradient sweep that reveals on hover */
+.drill-card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(120deg, #7aa2f710, #bb9af712, #9ece6a10);
+    background-size: 200% 200%;
+    opacity: 0;
+    transition: opacity 0.4s;
+    pointer-events: none;
+    animation: gradientShift 6s ease infinite;
+}
+.drill-card:hover::before { opacity: 1; }
 .drill-card:hover {
     border-color: #7aa2f7;
     transform: translateY(-3px);
-    box-shadow: 0 8px 32px #7aa2f720, 0 0 0 1px #7aa2f730;
+    box-shadow: 0 8px 32px #7aa2f730, 0 0 0 1px #7aa2f740, 0 0 60px #bb9af715;
+}
+@keyframes gradientShift {
+    0%   { background-position: 0% 50%; }
+    50%  { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
 }
 @keyframes slideIn {
     from { opacity: 0; transform: translateY(12px); }
@@ -293,6 +322,7 @@ def _init_state():
         "grade_result": None,
         "feedback": None,
         "schema_cache": {},
+        "username": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -323,6 +353,56 @@ if not api_key:
 client = anthropic.Anthropic(api_key=api_key)
 
 
+# ── Sign-in gate ───────────────────────────────────────────────────────────────
+def render_login():
+    st.markdown(
+        """<div style="text-align:center; padding:2rem 0 1rem 0;">
+            <span style="font-size:3rem;">⚡</span>
+            <div style="font-size:1.8rem; font-weight:700;
+                background:linear-gradient(135deg,#7aa2f7,#bb9af7);
+                -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+                letter-spacing:0.1em;">SQL DRILL</div>
+            <div style="font-size:0.8rem; color:#565f89; letter-spacing:0.2em;">SIGN IN TO TRACK YOUR PROGRESS</div>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+    _, mid, _ = st.columns([1, 2, 1])
+    with mid:
+        tab_in, tab_up = st.tabs(["Sign In", "Create Account"])
+        with tab_in:
+            u = st.text_input("Username", key="login_user")
+            p = st.text_input("Password", type="password", key="login_pass")
+            if st.button("Sign In", use_container_width=True, key="do_login"):
+                ok, msg = login_user(u, p)
+                if ok:
+                    st.session_state.username = u.strip().lower()
+                    st.rerun()
+                else:
+                    st.error(msg)
+            st.caption("Or continue without an account:")
+            if st.button("Continue as Guest", use_container_width=True, key="guest"):
+                st.session_state.username = "guest"
+                st.rerun()
+        with tab_up:
+            nu = st.text_input("Choose a username", key="reg_user")
+            np = st.text_input("Choose a password", type="password", key="reg_pass")
+            if st.button("Create Account", use_container_width=True, key="do_reg"):
+                ok, msg = register_user(nu, np)
+                if ok:
+                    st.session_state.username = nu.strip().lower()
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+
+if not st.session_state.username:
+    render_login()
+    st.stop()
+
+username = st.session_state.username
+
+
 # ── Schema helper ──────────────────────────────────────────────────────────────
 def get_schema(ds_id: str) -> dict:
     if ds_id not in st.session_state.schema_cache:
@@ -335,13 +415,30 @@ def get_schema(ds_id: str) -> dict:
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("""
-    <div style="text-align:center; padding: 0.5rem 0 1.2rem 0;">
+    <div style="text-align:center; padding: 0.5rem 0 0.6rem 0;">
         <span style="font-size:2.2rem;">⚡</span>
-        <div style="font-size:1.3rem; font-weight:700; color:#7aa2f7; letter-spacing:0.1em;">SQL DRILL</div>
+        <div style="font-size:1.3rem; font-weight:700;
+            background:linear-gradient(135deg,#7aa2f7,#bb9af7);
+            -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+            letter-spacing:0.1em;">SQL DRILL</div>
         <div style="font-size:0.7rem; color:#565f89; letter-spacing:0.15em;">INTERVIEW PREP</div>
     </div>
-    <hr>
     """, unsafe_allow_html=True)
+
+    # User badge + sign out
+    st.markdown(
+        f"""<div style="display:flex; align-items:center; justify-content:space-between;
+            background:#1a1b2e; border:1px solid #2a2d3e; border-radius:8px;
+            padding:0.4rem 0.8rem; margin-bottom:0.6rem;">
+            <span style="font-size:0.8rem; color:#9ece6a;">👤 {username}</span>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+    if st.button("Sign Out", use_container_width=True, key="signout"):
+        st.session_state.username = None
+        st.rerun()
+
+    st.markdown("<hr>", unsafe_allow_html=True)
 
     # Dataset picker
     ds_options = list(available_datasets.keys())
@@ -355,30 +452,28 @@ with st.sidebar:
         format_func=lambda x: ds_labels[x],
     )
 
-    # Show schema info — tables always visible, columns in expander
+    # Tables drop down from the dataset
     schema = get_schema(selected_ds)
-    st.markdown(
-        "<div style='font-size:0.72rem; color:#7aa2f7; letter-spacing:0.08em; text-transform:uppercase; margin-bottom:0.4rem;'>Tables</div>",
-        unsafe_allow_html=True,
-    )
-    for table, cols in schema.items():
-        with st.expander(f"🗂 {table}", expanded=False):
-            rows = "".join(
-                f"<tr>"
-                f"<td style='padding:3px 10px 3px 0; color:#c0caf5; font-size:0.78rem; white-space:nowrap;'>{c}</td>"
-                f"<td style='padding:3px 0; color:#565f89; font-size:0.7rem; text-align:right;'>{t}</td>"
-                f"</tr>"
-                for c, t in cols
-            )
-            st.markdown(
-                f"<table style='width:100%; border-collapse:collapse;'>{rows}</table>",
-                unsafe_allow_html=True,
-            )
+    ds_meta_side = DATASETS[selected_ds]
+    with st.expander(f"{ds_meta_side['emoji']} {selected_ds.title()} — {len(schema)} tables", expanded=True):
+        for table, cols in schema.items():
+            with st.expander(f"🗂 {table}", expanded=False):
+                rows = "".join(
+                    f"<tr>"
+                    f"<td style='padding:3px 10px 3px 0; color:#c0caf5; font-size:0.78rem; white-space:nowrap;'>{c}</td>"
+                    f"<td style='padding:3px 0; color:#565f89; font-size:0.7rem; text-align:right;'>{t}</td>"
+                    f"</tr>"
+                    for c, t in cols
+                )
+                st.markdown(
+                    f"<table style='width:100%; border-collapse:collapse;'>{rows}</table>",
+                    unsafe_allow_html=True,
+                )
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
     # Topic picker
-    weakest = get_weakest_topic()
+    weakest = get_weakest_topic(username)
     topic_options = ["🎯 Target my weakness"] + TOPICS
     topic_label = st.selectbox("TOPIC", topic_options)
 
@@ -440,7 +535,7 @@ with tab_drill:
         # Resolve topic
         actual_topic = topic_label
         if topic_label == "🎯 Target my weakness":
-            w = get_weakest_topic()
+            w = get_weakest_topic(username)
             actual_topic = w[1] if w else TOPICS[0]
 
         conn = get_connection(available_datasets[selected_ds])
@@ -575,6 +670,7 @@ with tab_drill:
                         st.session_state.feedback = None
 
             log_attempt(
+                username=username,
                 dataset=selected_ds,
                 topic=q["topic"],
                 difficulty=q["difficulty"],
@@ -640,10 +736,10 @@ with tab_drill:
 # STATS TAB
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_stats:
-    st.markdown("<h2>📊 Your Progress</h2>", unsafe_allow_html=True)
+    st.markdown(f"<h2>📊 {username.title()}'s Progress</h2>", unsafe_allow_html=True)
 
-    stats_df = get_stats()
-    weakest = get_weakest_topic()
+    stats_df = get_stats(username)
+    weakest = get_weakest_topic(username)
 
     if stats_df.empty:
         st.markdown(
