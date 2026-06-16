@@ -631,6 +631,10 @@ def play_animation(kind: str, volume: float = 0.9):
     otherwise falls back to a synthesized Web Audio cue.
     """
     vol = max(0.0, min(1.0, float(volume)))
+    # The "correct" clip is mastered louder than the "wrong" one, so attenuate it
+    # so both sit at a comparable level for the same slider setting.
+    if kind == "pass":
+        vol *= 0.35
     sound_url = _load_sound(kind)
     if sound_url:
         sound_js = (
