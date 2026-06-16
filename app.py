@@ -389,6 +389,9 @@ def _init_state():
         "username": None,
         "animate": None,
         "login_attempts": 0,
+        "sess_total": 0,
+        "sess_passed": 0,
+        "sess_time": 0.0,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -596,6 +599,43 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
+    # Session summary
+    if st.session_state.sess_total:
+        st.markdown("<hr>", unsafe_allow_html=True)
+        tot = st.session_state.sess_total
+        passed = st.session_state.sess_passed
+        avg = st.session_state.sess_time / tot
+        rate = round(passed / tot * 100)
+        st.markdown(
+            f"""<div style="font-size:0.72rem; color:#565f89; line-height:1.7;">
+            <span style="color:#7aa2f7; font-weight:700; letter-spacing:0.06em;">THIS SESSION</span><br>
+            {tot} attempted · <span style="color:#9ece6a;">{passed} passed</span> ({rate}%)<br>
+            avg {int(avg // 60):02d}:{int(avg % 60):02d} per question
+            </div>""",
+            unsafe_allow_html=True,
+        )
+
+
+# ── Hints (derived locally from topic + required columns — no API) ──────────────
+_TOPIC_HINTS = {
+    "single-table aggregation": "Aggregate with COUNT/SUM/AVG/MIN/MAX. No GROUP BY needed if you want one overall number; add GROUP BY to break it down per category.",
+    "GROUP BY + HAVING": "GROUP BY the dimension, aggregate the measure, then filter the *groups* with HAVING (not WHERE — WHERE filters rows before grouping).",
+    "CTEs": "Build it in stages with WITH name AS (...). Compute an intermediate result first, then SELECT from it — much cleaner than nesting subqueries.",
+    "window functions (ROW_NUMBER / RANK / DENSE_RANK)": "Use a window: func() OVER (PARTITION BY ... ORDER BY ...). ROW_NUMBER = unique 1..n; RANK leaves gaps after ties; DENSE_RANK doesn't. To keep only top-N per group, wrap it in a CTE and filter on the rank.",
+    "LAG / LEAD": "LAG(col) OVER (PARTITION BY ... ORDER BY ...) reads the previous row; LEAD reads the next. The first row of each partition is NULL — that's expected.",
+    "running totals / rolling aggregates": "SUM(col) OVER (ORDER BY ... ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) gives a running total. Narrow the frame (e.g. 2 PRECEDING) for a rolling window.",
+    "multi-table JOIN": "JOIN on the shared key. Use INNER JOIN to keep only matches, LEFT JOIN to keep all left-side rows (unmatched right columns become NULL).",
+    "correlated subqueries": "The inner query references the outer row. Often a window function or a JOIN to an aggregated subquery is cleaner and faster — worth considering.",
+}
+
+
+def build_hint(q: dict) -> str:
+    base = _TOPIC_HINTS.get(q["topic"], "Think about which tables and columns the question is really asking about.")
+    cols = ", ".join(q.get("required_columns", []))
+    extra = f"\n\nYour result should include these column(s): **{cols}**." if cols else ""
+    order = "\n\nOrder matters here — add an ORDER BY." if q.get("order_matters") else ""
+    return base + extra + order
+
 
 # ── Result animations ──────────────────────────────────────────────────────────
 _SOUNDS_DIR = Path(__file__).parent / "assets" / "sounds"
@@ -781,7 +821,42 @@ with tab_drill:
     # ── New Question button ────────────────────────────────────────────────────
     gen_col, _ = st.columns([1, 3])
     with gen_col:
-        gen_clicked = st.button("⚡ New Question", use_container_width=True)
+        gen_clicked = st.button("⚡ New Question  ·  ⌘/Ctrl+K", use_container_width=True)
+
+    # Keyboard shortcut: Ctrl+K / Cmd+K loads a new question. Same cross-iframe
+    # approach as the submit shortcut so it fires from inside the editor too.
+    components.html(
+        """
+        <script>
+        (function () {
+            const pdoc = window.parent.document;
+            function clickNew() {
+                const btn = Array.from(pdoc.querySelectorAll('button'))
+                    .find(b => b.innerText && b.innerText.includes('New Question'));
+                if (btn) { btn.click(); }
+            }
+            function handler(e) {
+                if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+                    e.preventDefault(); e.stopPropagation(); clickNew();
+                }
+            }
+            function attach(d) {
+                if (!d || d.__sqlDrillNewKey) return;
+                try { d.addEventListener('keydown', handler, true); d.__sqlDrillNewKey = true; } catch (err) {}
+            }
+            function scan() {
+                attach(pdoc);
+                pdoc.querySelectorAll('iframe').forEach(function (f) {
+                    try { attach(f.contentDocument); } catch (err) {}
+                });
+            }
+            scan();
+            setInterval(scan, 800);
+        })();
+        </script>
+        """,
+        height=0,
+    )
 
     if gen_clicked:
         # Resolve topic (None = any topic)
@@ -844,6 +919,10 @@ with tab_drill:
             </div>""",
             unsafe_allow_html=True,
         )
+
+        # ── Hint (no API; derived from topic + required columns) ─────────────────
+        with st.expander("💡 Stuck? Show a hint", expanded=False):
+            st.markdown(build_hint(q))
 
         # ── Timer update ───────────────────────────────────────────────────────
         if st.session_state.start_time and not st.session_state.graded:
@@ -962,6 +1041,10 @@ with tab_drill:
             st.session_state.elapsed = elapsed_at_submit
             # One-shot animation trigger (consumed once in the result block)
             st.session_state.animate = "pass" if result["passed"] else "fail"
+            # Session running totals
+            st.session_state.sess_total += 1
+            st.session_state.sess_passed += int(result["passed"])
+            st.session_state.sess_time += elapsed_at_submit
 
             if not result["passed"]:
                 st.session_state.fail_count += 1
@@ -1049,6 +1132,25 @@ with tab_drill:
                     expanded=False,
                 ):
                     st.code(q["reference_sql"], language="sql")
+                    import json as _json
+                    _sql_lit = _json.dumps(q["reference_sql"])
+                    components.html(
+                        f"""
+                        <button id="copybtn" style="
+                            background:linear-gradient(135deg,#7aa2f7,#bb9af7); color:#0f0f23;
+                            border:none; border-radius:8px; padding:6px 14px; font-weight:700;
+                            font-family:monospace; cursor:pointer;">📋 Copy SQL</button>
+                        <script>
+                        const b = document.getElementById('copybtn');
+                        b.addEventListener('click', async () => {{
+                            try {{ await navigator.clipboard.writeText({_sql_lit}); b.textContent = '✅ Copied'; }}
+                            catch (e) {{ b.textContent = '⚠ Copy failed'; }}
+                            setTimeout(() => b.textContent = '📋 Copy SQL', 1500);
+                        }});
+                        </script>
+                        """,
+                        height=44,
+                    )
             elif not gr["passed"]:
                 st.caption(
                     f"💡 Reference answer unlocks after 2 failed attempts "
