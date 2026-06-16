@@ -346,7 +346,7 @@ with st.sidebar:
     # Dataset picker
     ds_options = list(available_datasets.keys())
     ds_labels = {
-        ds_id: f"{DATASETS[ds_id]['emoji']}  {ds_id.title()} — {DATASETS[ds_id]['industry']}"
+        ds_id: f"{DATASETS[ds_id]['emoji']}  {ds_id.title()}"
         for ds_id in ds_options
     }
     selected_ds = st.selectbox(
