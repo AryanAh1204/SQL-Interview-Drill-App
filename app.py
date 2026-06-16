@@ -114,11 +114,51 @@ h3 { color: #9ece6a !important; }
     border: 1px solid #2a2d3e !important;
     border-radius: 8px !important;
     color: #c0caf5 !important;
-    transition: border-color 0.2s !important;
+    transition: border-color 0.2s, background 0.3s, box-shadow 0.3s !important;
+    cursor: pointer !important;
+}
+/* Make the whole selectbox area clickable + pointer cursor */
+[data-testid="stSelectbox"] *,
+[data-baseweb="select"],
+[data-baseweb="select"] * {
+    cursor: pointer !important;
 }
 [data-testid="stSelectbox"] > div > div:hover {
     border-color: #7aa2f7 !important;
-    box-shadow: 0 0 10px #7aa2f730 !important;
+    background: linear-gradient(135deg, #1a1b2e, #232544) !important;
+    box-shadow: 0 0 18px #7aa2f750, inset 0 0 20px #7aa2f712 !important;
+}
+
+/* ── Dropdown menu options ── */
+[data-baseweb="menu"] li,
+[data-baseweb="popover"] li,
+[role="option"] {
+    cursor: pointer !important;
+    transition: background 0.15s, color 0.15s, padding-left 0.15s !important;
+}
+[data-baseweb="menu"] li:hover,
+[data-baseweb="popover"] li:hover,
+[role="option"]:hover {
+    background: linear-gradient(90deg, #7aa2f730, #bb9af720) !important;
+    color: #c0caf5 !important;
+    padding-left: 1.2rem !important;
+    box-shadow: inset 3px 0 0 #7aa2f7 !important;
+}
+
+/* ── Radio buttons (difficulty) — pointer + hover ── */
+[data-testid="stRadio"] label,
+[data-testid="stRadio"] label * {
+    cursor: pointer !important;
+}
+[data-testid="stRadio"] label:hover {
+    color: #7aa2f7 !important;
+}
+
+/* ── Toggle + generic clickable widgets ── */
+[data-testid="stToggle"] *,
+.stCheckbox *,
+label[data-baseweb="checkbox"] * {
+    cursor: pointer !important;
 }
 
 /* ── Cards (custom HTML divs) ── */
@@ -284,29 +324,60 @@ hr { border-color: #2a2d3e !important; }
 ::-webkit-scrollbar-thumb { background: #2a2d3e; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #7aa2f7; }
 
-/* ── Cursor glow trail ── */
+/* ── Cursor glow trail (large ambient light that lights up the background) ── */
 #cursor-glow {
     pointer-events: none;
     position: fixed;
-    width: 20px; height: 20px;
+    width: 380px; height: 380px;
     border-radius: 50%;
-    background: radial-gradient(circle, #7aa2f760, transparent 70%);
+    background: radial-gradient(circle, #7aa2f730 0%, #bb9af718 35%, transparent 70%);
     transform: translate(-50%, -50%);
-    transition: opacity 0.2s;
+    transition: opacity 0.3s;
+    z-index: 0;
+    mix-blend-mode: screen;
+    filter: blur(8px);
+}
+/* Small sharp dot right at the cursor tip */
+#cursor-dot {
+    pointer-events: none;
+    position: fixed;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: radial-gradient(circle, #7aa2f790, transparent 70%);
+    transform: translate(-50%, -50%);
     z-index: 9999;
     mix-blend-mode: screen;
 }
 </style>
 
-<div id="cursor-glow"></div>
-<script>
-const glow = document.getElementById('cursor-glow');
-document.addEventListener('mousemove', e => {
-    glow.style.left = e.clientX + 'px';
-    glow.style.top  = e.clientY + 'px';
-});
-</script>
 """, unsafe_allow_html=True)
+
+# Cursor glow — injected via components.html so the JS actually runs, then
+# attaches the glow elements + listener to the PARENT (main app) document.
+import streamlit.components.v1 as components
+
+components.html(
+    """
+    <script>
+    const doc = window.parent.document;
+    if (!doc.getElementById('cursor-glow')) {
+        const glow = doc.createElement('div');
+        glow.id = 'cursor-glow';
+        doc.body.appendChild(glow);
+        const dot = doc.createElement('div');
+        dot.id = 'cursor-dot';
+        doc.body.appendChild(dot);
+        doc.addEventListener('mousemove', e => {
+            glow.style.left = e.clientX + 'px';
+            glow.style.top  = e.clientY + 'px';
+            dot.style.left  = e.clientX + 'px';
+            dot.style.top   = e.clientY + 'px';
+        });
+    }
+    </script>
+    """,
+    height=0,
+)
 
 
 # ── Session state init ─────────────────────────────────────────────────────────
