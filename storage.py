@@ -227,8 +227,8 @@ def get_stats(username: str) -> pd.DataFrame:
             dataset,
             topic,
             COUNT(*) AS attempts,
-            ROUND(AVG(passed) * 100, 1) AS pass_rate,
-            ROUND(AVG(time_seconds), 1)  AS avg_time_seconds
+            ROUND(CAST(AVG(passed) * 100 AS numeric), 1) AS pass_rate,
+            ROUND(CAST(AVG(time_seconds) AS numeric), 1) AS avg_time_seconds
         FROM attempts
         WHERE username = ?
         GROUP BY dataset, topic
@@ -245,8 +245,8 @@ def get_daily_stats(username: str) -> pd.DataFrame:
             substr(timestamp, 1, 10) AS day,
             COUNT(*)                 AS attempts,
             SUM(passed)              AS passed,
-            ROUND(AVG(passed) * 100, 1) AS pass_rate,
-            ROUND(AVG(time_seconds), 1) AS avg_time_seconds
+            ROUND(CAST(AVG(passed) * 100 AS numeric), 1) AS pass_rate,
+            ROUND(CAST(AVG(time_seconds) AS numeric), 1) AS avg_time_seconds
         FROM attempts
         WHERE username = ?
         GROUP BY day
