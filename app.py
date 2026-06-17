@@ -4,7 +4,6 @@ import re
 import time
 from pathlib import Path
 
-import anthropic
 import streamlit as st
 import streamlit.components.v1 as components
 from dotenv import load_dotenv
@@ -695,13 +694,20 @@ if not QUESTION_BANK:
     st.stop()
 
 # ── Anthropic client (OPTIONAL — only used for post-answer style feedback) ──────
-api_key = os.getenv("ANTHROPIC_API_KEY", "")
-if not api_key:
-    try:
-        api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
-    except Exception:
-        api_key = ""
-client = anthropic.Anthropic(api_key=api_key) if api_key else None
+# Built lazily on first use so the ~0.8s `import anthropic` never slows the initial
+# page load — it only happens the first time style feedback is actually requested.
+@st.cache_resource(show_spinner=False)
+def get_anthropic_client():
+    key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not key:
+        try:
+            key = st.secrets.get("ANTHROPIC_API_KEY", "")
+        except Exception:
+            key = ""
+    if not key:
+        return None
+    import anthropic
+    return anthropic.Anthropic(api_key=key)
 
 
 # ── Sign-in gate ───────────────────────────────────────────────────────────────
@@ -1632,7 +1638,7 @@ with tab_drill:
 
             if not result["passed"]:
                 st.session_state.fail_count += 1
-            elif client is not None:
+            elif (client := get_anthropic_client()) is not None:
                 # Optional style feedback on pass — only if an API key is configured
                 with st.spinner("Getting style feedback..."):
                     try:

@@ -3,8 +3,6 @@ import re
 import sqlite3
 from pathlib import Path
 
-import anthropic
-
 from db import introspect_schema, safe_execute
 
 TOPICS = [
@@ -63,7 +61,7 @@ def generate_question(
     topic: str,
     difficulty: str,
     conn: sqlite3.Connection,
-    client: anthropic.Anthropic,
+    client: "anthropic.Anthropic",  # noqa: F821 — lazy import; build_bank.py supplies the client
     max_retries: int = 4,
 ) -> dict:
     schema_text = _schema_to_text(schema)

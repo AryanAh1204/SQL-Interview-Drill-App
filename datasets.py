@@ -1,6 +1,5 @@
 import os
 import sqlite3
-import requests
 from pathlib import Path
 
 DATA_DIR = Path(__file__).parent / "data"
@@ -45,6 +44,7 @@ DATASETS = {
 
 def _download(url: str, dest: Path) -> bool:
     try:
+        import requests  # lazy: only needed when a bundled dataset is missing
         r = requests.get(url, timeout=60, allow_redirects=True)
         r.raise_for_status()
         dest.write_bytes(r.content)

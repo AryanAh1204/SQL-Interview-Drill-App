@@ -1,6 +1,5 @@
 import sqlite3
 
-import anthropic
 import pandas as pd
 
 from db import compare_results, safe_execute
@@ -29,7 +28,7 @@ def get_style_feedback(
     user_sql: str,
     ref_sql: str,
     question_text: str,
-    client: anthropic.Anthropic,
+    client: "anthropic.Anthropic",  # noqa: F821 — lazy import; only the app passes a real client
 ) -> str:
     prompt = f"""You are a senior SQL interviewer at a top tech/finance firm reviewing a candidate's query.
 
