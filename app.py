@@ -218,6 +218,20 @@ h3 { color: #9ece6a !important; }
     border-color: #565f89 !important;
 }
 
+/* ── Code editor (streamlit-ace iframe) frame + focus glow ── */
+iframe[src*="streamlit_ace"] {
+    border-radius: 12px !important;
+    border: 1px solid #2a2d3e !important;
+    box-shadow: 0 8px 26px rgba(0,0,0,0.32) !important;
+    transition: border-color 0.25s, box-shadow 0.25s !important;
+}
+iframe.editor-focused[src*="streamlit_ace"] {
+    border-color: #7aa2f7 !important;
+    box-shadow: 0 0 0 2px rgba(122,162,247,0.22),
+                0 0 28px rgba(122,162,247,0.28),
+                0 8px 26px rgba(0,0,0,0.38) !important;
+}
+
 /* ── Selectbox / dropdowns ── */
 [data-testid="stSelectbox"] > div > div {
     background: #1a1b2e !important;
@@ -364,6 +378,15 @@ label[data-baseweb="checkbox"] * {
     width: 176px !important;
     min-width: 176px !important;
     z-index: 1000;
+}
+/* On narrow screens, let the timer flow normally so it can't cover the content. */
+@media (max-width: 820px) {
+    [data-testid="column"]:has(.timer-anchor),
+    [data-testid="stColumn"]:has(.timer-anchor) {
+        position: static !important;
+        width: 100% !important;
+        min-width: 0 !important;
+    }
 }
 .timer-card {
     background: rgba(20,21,36,0.88);
@@ -612,6 +635,7 @@ def _init_state():
     defaults = {
         "available_datasets": None,
         "question": None,
+        "q_nonce": 0,  # bumped per loaded question → stable, collision-free widget keys
         "ref_df": None,
         # Pausable timer that starts on the first keystroke:
         "t_started": False,   # has the user begun typing yet?
@@ -1115,8 +1139,10 @@ with tab_drill:
         )
 
     with col_timer:
-        # Marker that pins this whole column (timer + pause button) via CSS :has().
-        st.markdown('<div class="timer-anchor"></div>', unsafe_allow_html=True)
+        # Slots filled in only when a question is active; the .timer-anchor (which
+        # pins the whole column via CSS :has()) is rendered then too, so the column
+        # isn't fixed when empty.
+        anchor_slot = st.empty()
         timer_slot = st.empty()
         pause_slot = st.empty()
 
@@ -1193,6 +1219,7 @@ with tab_drill:
                 st.error(f"Bank question has a broken reference query: {err}")
             else:
                 st.session_state.question = q
+                st.session_state.q_nonce += 1  # fresh, unique editor key for this question
                 st.session_state.ref_df = ref_df
                 # Reset the timer — it stays at 0 until the user starts typing.
                 st.session_state.t_started = False
@@ -1243,11 +1270,15 @@ with tab_drill:
             )
 
         # ── Timer (starts on first keystroke · pausable · pinned to viewport) ────
+        # Render the anchor now (a question is active) so CSS pins the timer column.
+        anchor_slot.markdown('<div class="timer-anchor"></div>', unsafe_allow_html=True)
+
         # The editor's value lands in session_state before the widget is rebuilt
         # below, so a non-empty value here means the user has started typing.
+        _nonce = st.session_state.q_nonce
         _typed = str(
-            st.session_state.get(f"ace_{id(q)}")
-            or st.session_state.get(f"sql_{id(q)}")
+            st.session_state.get(f"ace_{_nonce}")
+            or st.session_state.get(f"sql_{_nonce}")
             or ""
         ).strip()
         if _typed and not st.session_state.t_started and not st.session_state.graded:
@@ -1316,15 +1347,24 @@ with tab_drill:
             st.rerun()
 
         # ── SQL Editor ────────────────────────────────────────────────────────
+        st.markdown(
+            """<div style="display:flex; align-items:center; gap:0.6rem; margin:0.2rem 0 0.35rem 0;">
+                <span style="font-size:0.72rem; letter-spacing:0.14em; text-transform:uppercase;
+                    color:#7aa2f7; font-weight:700;">⌨ SQL Editor</span>
+                <span style="flex:1; height:1px; background:linear-gradient(90deg,#2a2d3e,transparent);"></span>
+                <span style="font-size:0.66rem; color:#565f89;">⌘/Ctrl+↵ to run</span>
+            </div>""",
+            unsafe_allow_html=True,
+        )
         try:
             from streamlit_ace import st_ace
             user_sql = st_ace(
                 placeholder="-- Write your SQL query here...\nSELECT ...",
                 language="sql",
                 theme="dracula",
-                font_size=14,
+                font_size=15,
                 height=220,
-                key=f"ace_{id(q)}",
+                key=f"ace_{_nonce}",
                 auto_update=True,
             )
         except ImportError:
@@ -1332,8 +1372,114 @@ with tab_drill:
                 "Your SQL Query",
                 placeholder="-- Write your SQL query here...\nSELECT ...",
                 height=220,
-                key=f"sql_{id(q)}",
+                key=f"sql_{_nonce}",
             )
+
+        # Editor flourishes (run inside the Ace iframe): blend its background with
+        # the app, glow the frame on focus, and emit cursor sparkles as you type.
+        # The sparkles honour the sidebar "Sound & animation" toggle.
+        _glimmer_flag = "true" if effects_on else "false"
+        components.html(
+            """
+            <script>
+            (function () {
+                const GLIMMERS = __GLIMMERS__;
+                const pdoc = window.parent.document;
+                const COLORS = ['#7aa2f7','#bb9af7','#9ece6a','#ff9e64','#e0af68','#f7768e'];
+                const SKIP = ['Shift','Control','Alt','Meta','CapsLock','Escape','Tab',
+                              'ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'];
+                function aceFrame() {
+                    return Array.from(pdoc.querySelectorAll('iframe'))
+                        .find(f => (f.src || '').includes('streamlit_ace'));
+                }
+                function setup() {
+                    const frame = aceFrame();
+                    if (!frame) return;
+                    let idoc, iwin;
+                    try { idoc = frame.contentDocument; iwin = frame.contentWindow; } catch (e) { return; }
+                    if (!idoc || !idoc.body || idoc.__editorFx) return;
+                    idoc.__editorFx = true;
+
+                    // Blend the editor + gutter background with the dark app shell.
+                    const sx = idoc.createElement('style');
+                    sx.textContent =
+                        '.ace_editor{background:#15162a !important;}' +
+                        '.ace_gutter{background:#101124 !important;color:#565f89 !important;}' +
+                        '.ace_editor .ace_content{padding-top:6px;}';
+                    (idoc.head || idoc.body).appendChild(sx);
+
+                    // Focus glow toggles a class on the iframe element (parent doc).
+                    idoc.addEventListener('focusin',  () => frame.classList.add('editor-focused'), true);
+                    idoc.addEventListener('focusout', () => frame.classList.remove('editor-focused'), true);
+
+                    if (!GLIMMERS) return;
+
+                    // Sparkle canvas overlaying the editor (clicks pass through).
+                    const cv = idoc.createElement('canvas');
+                    cv.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:9999';
+                    idoc.body.appendChild(cv);
+                    const ctx = cv.getContext('2d');
+                    const resize = () => { cv.width = iwin.innerWidth; cv.height = iwin.innerHeight; };
+                    resize(); iwin.addEventListener('resize', resize);
+
+                    let parts = [], raf = null;
+                    function star(s) {
+                        ctx.beginPath();
+                        for (let i = 0; i < 4; i++) {
+                            const a = i * Math.PI / 2;
+                            ctx.lineTo(Math.cos(a) * s, Math.sin(a) * s);
+                            ctx.lineTo(Math.cos(a + Math.PI / 4) * s * 0.34, Math.sin(a + Math.PI / 4) * s * 0.34);
+                        }
+                        ctx.closePath(); ctx.fill();
+                    }
+                    function loop() {
+                        ctx.clearRect(0, 0, cv.width, cv.height);
+                        for (const p of parts) {
+                            p.vy += 0.05; p.vx *= 0.96; p.vy *= 0.98;
+                            p.x += p.vx; p.y += p.vy; p.life -= p.decay;
+                        }
+                        parts = parts.filter(p => p.life > 0);
+                        for (const p of parts) {
+                            ctx.save();
+                            ctx.globalAlpha = Math.max(0, p.life);
+                            ctx.fillStyle = p.color; ctx.shadowColor = p.color; ctx.shadowBlur = 8;
+                            if (p.star) { ctx.translate(p.x, p.y); ctx.rotate((1 - p.life) * 3); star(p.size * 2); }
+                            else { ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, 7); ctx.fill(); }
+                            ctx.restore();
+                        }
+                        raf = parts.length ? iwin.requestAnimationFrame(loop) : null;
+                    }
+                    function emit() {
+                        const cur = idoc.querySelector('.ace_cursor');
+                        let x = cv.width / 2, y = cv.height / 2;
+                        if (cur) { const r = cur.getBoundingClientRect(); x = r.right; y = r.top + r.height / 2; }
+                        const n = 4 + (Math.random() * 4 | 0);
+                        for (let i = 0; i < n; i++) {
+                            const ang = Math.random() * Math.PI * 2;
+                            const sp = 1.1 + Math.random() * 2.4;
+                            parts.push({
+                                x, y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp - 1.1,
+                                life: 1, decay: 0.018 + Math.random() * 0.02,
+                                size: 1.4 + Math.random() * 2.3,
+                                color: COLORS[(Math.random() * COLORS.length) | 0],
+                                star: Math.random() < 0.45
+                            });
+                        }
+                        if (!raf) raf = iwin.requestAnimationFrame(loop);
+                    }
+                    idoc.addEventListener('keydown', function (e) {
+                        if (e.ctrlKey || e.metaKey || e.altKey) return;
+                        if (SKIP.includes(e.key)) return;
+                        emit();
+                    }, true);
+                }
+                setInterval(setup, 400);
+                setup();
+            })();
+            </script>
+            """.replace("__GLIMMERS__", _glimmer_flag),
+            height=0,
+        )
 
         # ── Submit ────────────────────────────────────────────────────────────
         submit_col, _ = st.columns([1, 3])
