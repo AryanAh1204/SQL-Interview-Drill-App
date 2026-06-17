@@ -1,5 +1,6 @@
 import os
 import random
+import re
 import time
 from pathlib import Path
 
@@ -191,6 +192,13 @@ h3 { color: #9ece6a !important; }
 .stButton > button:active {
     transform: translateY(0) scale(0.98) !important;
 }
+.stButton > button:disabled {
+    opacity: 0.45 !important;
+    filter: grayscale(0.4) !important;
+    cursor: not-allowed !important;
+    box-shadow: none !important;
+    transform: none !important;
+}
 
 /* ── Text inputs / text areas ── */
 .stTextArea textarea, .stTextInput input {
@@ -345,6 +353,29 @@ label[data-baseweb="checkbox"] * {
     from { text-shadow: 0 0 10px #f7768e50; }
     to   { text-shadow: 0 0 30px #f7768e90; }
 }
+/* Pin the timer column to the viewport so it stays visible while scrolling.
+   The column is identified by the .timer-anchor marker we render inside it.
+   (Streamlit's column testid is "column" on some versions, "stColumn" on others.) */
+[data-testid="column"]:has(.timer-anchor),
+[data-testid="stColumn"]:has(.timer-anchor) {
+    position: fixed !important;
+    top: 4.8rem;
+    right: 1.6rem;
+    width: 176px !important;
+    min-width: 176px !important;
+    z-index: 1000;
+}
+.timer-card {
+    background: rgba(20,21,36,0.88);
+    backdrop-filter: blur(12px) saturate(120%);
+    -webkit-backdrop-filter: blur(12px) saturate(120%);
+    border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 14px;
+    padding: 0.7rem 0.9rem;
+    text-align: center;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.4);
+}
+.timer-status { font-size: 0.62rem; letter-spacing: 0.06em; margin-top: 0.15rem; }
 
 /* ── Result banners ── */
 .result-pass {
@@ -582,8 +613,11 @@ def _init_state():
         "available_datasets": None,
         "question": None,
         "ref_df": None,
-        "start_time": None,
-        "elapsed": 0.0,
+        # Pausable timer that starts on the first keystroke:
+        "t_started": False,   # has the user begun typing yet?
+        "t_running": False,   # currently counting (not paused)?
+        "t_accum": 0.0,       # seconds banked from finished running segments
+        "t_mark": None,       # epoch when the current running segment began
         "fail_count": 0,
         "graded": False,
         "grade_result": None,
@@ -712,6 +746,51 @@ def get_schema(ds_id: str) -> dict:
     return st.session_state.schema_cache[ds_id]
 
 
+# ── Timer state helper ──────────────────────────────────────────────────────────
+def timer_elapsed() -> float:
+    """Seconds counted so far: accumulated running time plus the live segment."""
+    e = st.session_state.t_accum
+    if st.session_state.t_running and st.session_state.t_mark is not None:
+        e += time.time() - st.session_state.t_mark
+    return e
+
+
+# ── Schema dropdown tree (shared by the sidebar + the per-question panel) ────────
+def schema_tree_html(tables, schema, summary, open_default=False) -> str:
+    """Native-<details> dropdown: outer = `summary`, inner = one per table's cols."""
+    inner = ""
+    for table in tables:
+        rows = "".join(
+            f"<tr>"
+            f"<td style='padding:2px 8px 2px 0; color:#c0caf5; font-size:0.74rem; white-space:nowrap;'>{c}</td>"
+            f"<td style='padding:2px 0; color:#565f89; font-size:0.68rem; text-align:right;'>{t}</td>"
+            f"</tr>"
+            for c, t in schema.get(table, [])
+        )
+        inner += (
+            f"<details class='schema-table'><summary>🗂 {table}</summary>"
+            f"<table class='schema-cols' style='width:100%; border-collapse:collapse;'>{rows}</table>"
+            f"</details>"
+        )
+    openattr = " open" if open_default else ""
+    return (
+        f"<details class='schema-dd'{openattr}><summary>{summary}</summary>"
+        f"<div class='schema-body'>{inner}</div></details>"
+    )
+
+
+# ── Which tables a question's reference query touches ────────────────────────────
+def relevant_tables(q: dict, schema: dict) -> list[str]:
+    """Tables whose name appears as a whole token in the reference SQL."""
+    sql = q.get("reference_sql", "") or ""
+    hits = []
+    for table in schema:
+        pattern = r"(?<![A-Za-z0-9_])" + re.escape(table) + r"(?![A-Za-z0-9_])"
+        if re.search(pattern, sql, re.IGNORECASE):
+            hits.append(table)
+    return hits
+
+
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown(f"""
@@ -753,30 +832,17 @@ with st.sidebar:
     )
 
     # Tables browser — an outer dropdown the table list drops down from, with each
-    # table a nested dropdown of its columns. Built as native HTML <details> so it
-    # can nest freely (Streamlit's st.expander cannot nest inside another expander).
+    # table a nested dropdown of its columns (see schema_tree_html). Native HTML
+    # <details> so it can nest (Streamlit's st.expander cannot nest in an expander).
     schema = get_schema(selected_ds)
     ds_meta_side = DATASETS[selected_ds]
-    tables_html = ""
-    for table, cols in schema.items():
-        rows = "".join(
-            f"<tr>"
-            f"<td style='padding:2px 8px 2px 0; color:#c0caf5; font-size:0.74rem; white-space:nowrap;'>{c}</td>"
-            f"<td style='padding:2px 0; color:#565f89; font-size:0.68rem; text-align:right;'>{t}</td>"
-            f"</tr>"
-            for c, t in cols
-        )
-        tables_html += (
-            f"<details class='schema-table'>"
-            f"<summary>🗂 {table}</summary>"
-            f"<table class='schema-cols' style='width:100%; border-collapse:collapse;'>{rows}</table>"
-            f"</details>"
-        )
     st.markdown(
-        f"""<details class="schema-dd" open>
-            <summary>{ds_meta_side['emoji']} {selected_ds.title()} · {len(schema)} tables</summary>
-            <div class="schema-body">{tables_html}</div>
-        </details>""",
+        schema_tree_html(
+            list(schema.keys()),
+            schema,
+            f"{ds_meta_side['emoji']} {selected_ds.title()} · {len(schema)} tables",
+            open_default=True,
+        ),
         unsafe_allow_html=True,
     )
 
@@ -1049,7 +1115,10 @@ with tab_drill:
         )
 
     with col_timer:
+        # Marker that pins this whole column (timer + pause button) via CSS :has().
+        st.markdown('<div class="timer-anchor"></div>', unsafe_allow_html=True)
         timer_slot = st.empty()
+        pause_slot = st.empty()
 
     # ── New Question button ────────────────────────────────────────────────────
     gen_col, _ = st.columns([1, 3])
@@ -1125,8 +1194,11 @@ with tab_drill:
             else:
                 st.session_state.question = q
                 st.session_state.ref_df = ref_df
-                st.session_state.start_time = time.time()
-                st.session_state.elapsed = 0.0
+                # Reset the timer — it stays at 0 until the user starts typing.
+                st.session_state.t_started = False
+                st.session_state.t_running = False
+                st.session_state.t_accum = 0.0
+                st.session_state.t_mark = None
                 st.session_state.fail_count = 0
                 st.session_state.graded = False
                 st.session_state.grade_result = None
@@ -1157,37 +1229,91 @@ with tab_drill:
         with st.expander("💡 Stuck? Show a hint", expanded=False):
             st.markdown(build_hint(q))
 
-        # ── Timer update ───────────────────────────────────────────────────────
-        if st.session_state.start_time and not st.session_state.graded:
-            st.session_state.elapsed = time.time() - st.session_state.start_time
-            # Tick the stopwatch / countdown live (1s) while a question is active.
+        # ── Relevant tables for this question (dropdown) ─────────────────────────
+        _rel = relevant_tables(q, schema)
+        if _rel:
+            st.markdown(
+                schema_tree_html(
+                    _rel,
+                    schema,
+                    f"📋 Relevant tables for this question · {len(_rel)}",
+                    open_default=False,
+                ),
+                unsafe_allow_html=True,
+            )
+
+        # ── Timer (starts on first keystroke · pausable · pinned to viewport) ────
+        # The editor's value lands in session_state before the widget is rebuilt
+        # below, so a non-empty value here means the user has started typing.
+        _typed = str(
+            st.session_state.get(f"ace_{id(q)}")
+            or st.session_state.get(f"sql_{id(q)}")
+            or ""
+        ).strip()
+        if _typed and not st.session_state.t_started and not st.session_state.graded:
+            st.session_state.t_started = True
+            st.session_state.t_running = True
+            st.session_state.t_mark = time.time()
+
+        # Tick live (1s) only while actively running.
+        if st.session_state.t_running and not st.session_state.graded:
             if st_autorefresh is not None:
                 st_autorefresh(interval=1000, key="timer_tick")
 
-        elapsed = st.session_state.elapsed
-        mins = int(elapsed) // 60
-        secs = int(elapsed) % 60
+        elapsed = timer_elapsed()
+        mins, secs = int(elapsed) // 60, int(elapsed) % 60
+
+        if not st.session_state.t_started:
+            status = "<span style='color:#565f89;'>⌨ starts when you type</span>"
+        elif st.session_state.t_running:
+            status = "<span style='color:#9ece6a;'>● running</span>"
+        else:
+            status = "<span style='color:#e0af68;'>⏸ paused</span>"
 
         if pressure_mode:
             remaining = max(0, pressure_seconds - int(elapsed))
-            rem_m = remaining // 60
-            rem_s = remaining % 60
-            is_urgent = remaining < 60
+            rem_m, rem_s = remaining // 60, remaining % 60
+            is_urgent = remaining < 60 and st.session_state.t_running
             timer_cls = "timer-pressure" if is_urgent else "timer-display"
             timer_slot.markdown(
-                f"""<div class="{timer_cls}">{rem_m:02d}:{rem_s:02d}</div>
-                <div style="font-size:0.7rem; color:#565f89;">remaining</div>""",
+                f"""<div class="timer-card">
+                    <div class="{timer_cls}" style="font-size:1.9rem;">{rem_m:02d}:{rem_s:02d}</div>
+                    <div style="font-size:0.62rem; color:#565f89;">remaining</div>
+                    <div class="timer-status">{status}</div>
+                </div>""",
                 unsafe_allow_html=True,
             )
-            prog_val = remaining / pressure_seconds
             if remaining == 0:
                 st.warning("⏰ Time's up! You can still submit your answer.")
         else:
             timer_slot.markdown(
-                f"""<div class="timer-display">{mins:02d}:{secs:02d}</div>
-                <div style="font-size:0.7rem; color:#565f89;">elapsed</div>""",
+                f"""<div class="timer-card">
+                    <div class="timer-display" style="font-size:1.9rem;">{mins:02d}:{secs:02d}</div>
+                    <div style="font-size:0.62rem; color:#565f89;">elapsed</div>
+                    <div class="timer-status">{status}</div>
+                </div>""",
                 unsafe_allow_html=True,
             )
+
+        # Pause / resume — lives in the pinned timer column, under the clock.
+        # "Resume" only once it's been started and is paused; otherwise "Pause".
+        _paused = st.session_state.t_started and not st.session_state.t_running
+        _pause_label = "▶ Resume" if _paused else "⏸ Pause"
+        if pause_slot.button(
+            _pause_label,
+            key="pause_toggle",
+            use_container_width=True,
+            disabled=(not st.session_state.t_started or st.session_state.graded),
+        ):
+            _now = time.time()
+            if st.session_state.t_running:
+                st.session_state.t_accum += _now - (st.session_state.t_mark or _now)
+                st.session_state.t_running = False
+                st.session_state.t_mark = None
+            else:
+                st.session_state.t_running = True
+                st.session_state.t_mark = _now
+            st.rerun()
 
         # ── SQL Editor ────────────────────────────────────────────────────────
         try:
@@ -1258,7 +1384,12 @@ with tab_drill:
         )
 
         if submit_clicked and user_sql and user_sql.strip():
-            elapsed_at_submit = time.time() - st.session_state.start_time if st.session_state.start_time else 0
+            # Freeze the timer at the moment of submission.
+            elapsed_at_submit = timer_elapsed()
+            if st.session_state.t_running and st.session_state.t_mark is not None:
+                st.session_state.t_accum += time.time() - st.session_state.t_mark
+            st.session_state.t_running = False
+            st.session_state.t_mark = None
             conn = get_connection(available_datasets[selected_ds])
 
             result = grade(
@@ -1271,7 +1402,6 @@ with tab_drill:
 
             st.session_state.grade_result = result
             st.session_state.graded = True
-            st.session_state.elapsed = elapsed_at_submit
             # One-shot animation trigger (consumed once in the result block)
             st.session_state.animate = "pass" if result["passed"] else "fail"
             # Session running totals
