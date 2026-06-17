@@ -1395,16 +1395,20 @@ with tab_drill:
             )
 
         # Editor flourishes (run inside the Ace iframe): blend its background with
-        # the app, glow the frame on focus, and emit cursor sparkles as you type.
-        # The sparkles honour the sidebar "Sound & animation" toggle.
+        # the app, glow the frame on focus, and shower cursor sparks plus a
+        # mechanical-keyboard click as you type. Honours the "Sound & animation"
+        # toggle + volume slider.
         _glimmer_flag = "true" if effects_on else "false"
+        _click_vol = round((volume_pct or 0) / 100, 3)
         components.html(
             """
             <script>
             (function () {
                 const GLIMMERS = __GLIMMERS__;
+                const VOL = __CLICKVOL__;
                 const pdoc = window.parent.document;
-                const COLORS = ['#7aa2f7','#bb9af7','#9ece6a','#ff9e64','#e0af68','#f7768e'];
+                // Hot spark palette: white-hot core fading to orange embers.
+                const COLORS = ['#ffffff','#fff2c4','#ffd27a','#ffae3d','#ff8a1e','#ff6a1a'];
                 const SKIP = ['Shift','Control','Alt','Meta','CapsLock','Escape','Tab',
                               'ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'];
                 function aceFrame() {
@@ -1423,8 +1427,7 @@ with tab_drill:
                     const sx = idoc.createElement('style');
                     sx.textContent =
                         '.ace_editor{background:#15162a !important;}' +
-                        '.ace_gutter{background:#101124 !important;color:#565f89 !important;}' +
-                        '.ace_editor .ace_content{padding-top:6px;}';
+                        '.ace_gutter{background:#101124 !important;color:#565f89 !important;}';
                     (idoc.head || idoc.body).appendChild(sx);
 
                     // Focus glow toggles a class on the iframe element (parent doc).
@@ -1433,7 +1436,59 @@ with tab_drill:
 
                     if (!GLIMMERS) return;
 
-                    // Sparkle canvas overlaying the editor (clicks pass through).
+                    // ── Mechanical-keyboard click (Web Audio), one per keystroke ──
+                    let ac = null;
+                    function audio() {
+                        if (ac) return ac;
+                        try {
+                            const AC = iwin.AudioContext || iwin.webkitAudioContext
+                                     || window.parent.AudioContext || window.parent.webkitAudioContext;
+                            ac = new AC();
+                        } catch (e) { ac = null; }
+                        return ac;
+                    }
+                    // Short decaying noise burst through a given filter (click / clack).
+                    function noiseBurst(c, t, dur, peak, filt) {
+                        const len = Math.max(1, Math.ceil(c.sampleRate * dur));
+                        const buf = c.createBuffer(1, len, c.sampleRate);
+                        const d = buf.getChannelData(0);
+                        for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+                        const src = c.createBufferSource(); src.buffer = buf;
+                        const g = c.createGain();
+                        g.gain.setValueAtTime(0.0001, t);
+                        g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), t + 0.0012);
+                        g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+                        src.connect(filt).connect(g).connect(c.destination);
+                        src.start(t); src.stop(t + dur + 0.01);
+                    }
+                    function keyclick(big) {
+                        if (VOL <= 0) return;
+                        const c = audio(); if (!c) return;
+                        if (c.state === 'suspended' && c.resume) c.resume();
+                        const t = c.currentTime;
+                        const v = VOL * (big ? 1.15 : 1);
+                        // 1) Sharp click transient — very short high-passed noise.
+                        const hp = c.createBiquadFilter(); hp.type = 'highpass';
+                        hp.frequency.value = 1900 + Math.random() * 700;
+                        noiseBurst(c, t, 0.012, 0.16 * v, hp);
+                        // 2) Plasticky clack — mid band-passed noise.
+                        const bp = c.createBiquadFilter(); bp.type = 'bandpass';
+                        bp.frequency.value = 700 + Math.random() * 350; bp.Q.value = 1.1;
+                        noiseBurst(c, t, 0.03, 0.07 * v, bp);
+                        // 3) Low thock body — short decaying triangle (deeper for big keys).
+                        const f0 = (big ? 110 : 165) + Math.random() * 50;
+                        const o = c.createOscillator(); o.type = 'triangle';
+                        o.frequency.setValueAtTime(f0 * 1.7, t);
+                        o.frequency.exponentialRampToValueAtTime(f0, t + 0.03);
+                        const og = c.createGain();
+                        og.gain.setValueAtTime(0.0001, t);
+                        og.gain.exponentialRampToValueAtTime(Math.max(0.0002, (big ? 0.14 : 0.11) * v), t + 0.004);
+                        og.gain.exponentialRampToValueAtTime(0.0001, t + (big ? 0.08 : 0.06));
+                        o.connect(og).connect(c.destination);
+                        o.start(t); o.stop(t + 0.1);
+                    }
+
+                    // Spark canvas overlaying the editor (clicks pass through).
                     const cv = idoc.createElement('canvas');
                     cv.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:9999';
                     idoc.body.appendChild(cv);
@@ -1454,15 +1509,15 @@ with tab_drill:
                     function loop() {
                         ctx.clearRect(0, 0, cv.width, cv.height);
                         for (const p of parts) {
-                            p.vy += 0.05; p.vx *= 0.96; p.vy *= 0.98;
+                            p.vy += 0.10; p.vx *= 0.95; p.vy *= 0.97;   // more gravity → spark shower
                             p.x += p.vx; p.y += p.vy; p.life -= p.decay;
                         }
                         parts = parts.filter(p => p.life > 0);
                         for (const p of parts) {
                             ctx.save();
                             ctx.globalAlpha = Math.max(0, p.life);
-                            ctx.fillStyle = p.color; ctx.shadowColor = p.color; ctx.shadowBlur = 8;
-                            if (p.star) { ctx.translate(p.x, p.y); ctx.rotate((1 - p.life) * 3); star(p.size * 2); }
+                            ctx.fillStyle = p.color; ctx.shadowColor = p.color; ctx.shadowBlur = 10;
+                            if (p.star) { ctx.translate(p.x, p.y); ctx.rotate((1 - p.life) * 3); star(p.size * 1.8); }
                             else { ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, 7); ctx.fill(); }
                             ctx.restore();
                         }
@@ -1472,16 +1527,16 @@ with tab_drill:
                         const cur = idoc.querySelector('.ace_cursor');
                         let x = cv.width / 2, y = cv.height / 2;
                         if (cur) { const r = cur.getBoundingClientRect(); x = r.right; y = r.top + r.height / 2; }
-                        const n = 4 + (Math.random() * 4 | 0);
+                        const n = 5 + (Math.random() * 5 | 0);
                         for (let i = 0; i < n; i++) {
                             const ang = Math.random() * Math.PI * 2;
-                            const sp = 1.1 + Math.random() * 2.4;
+                            const sp = 1.4 + Math.random() * 3.0;
                             parts.push({
-                                x, y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp - 1.1,
-                                life: 1, decay: 0.018 + Math.random() * 0.02,
-                                size: 1.4 + Math.random() * 2.3,
+                                x, y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp - 1.0,
+                                life: 1, decay: 0.02 + Math.random() * 0.025,
+                                size: 1.0 + Math.random() * 2.0,
                                 color: COLORS[(Math.random() * COLORS.length) | 0],
-                                star: Math.random() < 0.45
+                                star: Math.random() < 0.35
                             });
                         }
                         if (!raf) raf = iwin.requestAnimationFrame(loop);
@@ -1490,13 +1545,14 @@ with tab_drill:
                         if (e.ctrlKey || e.metaKey || e.altKey) return;
                         if (SKIP.includes(e.key)) return;
                         emit();
+                        keyclick(e.key === ' ' || e.key === 'Enter' || e.key === 'Backspace');
                     }, true);
                 }
                 setInterval(setup, 400);
                 setup();
             })();
             </script>
-            """.replace("__GLIMMERS__", _glimmer_flag),
+            """.replace("__GLIMMERS__", _glimmer_flag).replace("__CLICKVOL__", str(_click_vol)),
             height=0,
         )
 
