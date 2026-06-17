@@ -2,53 +2,156 @@ import hashlib
 import hmac
 import os
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 
-DB_PATH = Path(__file__).parent / "drill_history.db"
-
-# PBKDF2 parameters — salted, slow, and verified in constant time.
 _PBKDF2_ROUNDS = 200_000
+_DB_PATH = Path(__file__).parent / "drill_history.db"
+_DATABASE_URL = os.environ.get("DATABASE_URL")
 
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            username      TEXT PRIMARY KEY,
-            password_hash TEXT NOT NULL,
-            created_at    TEXT NOT NULL
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS attempts (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            username    TEXT NOT NULL DEFAULT 'guest',
-            timestamp   TEXT NOT NULL,
-            dataset     TEXT NOT NULL,
-            topic       TEXT NOT NULL,
-            difficulty  TEXT NOT NULL,
-            time_seconds REAL NOT NULL,
-            passed      INTEGER NOT NULL,
-            my_sql      TEXT
-        )
-    """)
-    # Migrate older DBs that lack the username column
-    cols = [r[1] for r in conn.execute("PRAGMA table_info(attempts)").fetchall()]
-    if "username" not in cols:
-        conn.execute("ALTER TABLE attempts ADD COLUMN username TEXT NOT NULL DEFAULT 'guest'")
-    conn.commit()
-    return conn
+# ── Backend — Postgres when DATABASE_URL is set, else SQLite ──────────────────
+if _DATABASE_URL:
+    import psycopg2
+
+    @contextmanager
+    def _connection():
+        conn = psycopg2.connect(_DATABASE_URL)
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def _q(sql: str) -> str:
+        return sql.replace("?", "%s")
+
+    def _execute(sql: str, params: tuple = ()) -> None:
+        with _connection() as conn:
+            conn.cursor().execute(_q(sql), params)
+
+    def _fetchone(sql: str, params: tuple = ()):
+        with _connection() as conn:
+            cur = conn.cursor()
+            cur.execute(_q(sql), params)
+            return cur.fetchone()
+
+    def _fetchall(sql: str, params: tuple = ()):
+        with _connection() as conn:
+            cur = conn.cursor()
+            cur.execute(_q(sql), params)
+            return cur.fetchall()
+
+    def _read_df(sql: str, params: tuple = ()) -> pd.DataFrame:
+        with _connection() as conn:
+            return pd.read_sql_query(_q(sql), conn, params=params)
+
+    def _init_schema() -> None:
+        with _connection() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    username      TEXT PRIMARY KEY,
+                    password_hash TEXT NOT NULL,
+                    created_at    TEXT NOT NULL
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS attempts (
+                    id            SERIAL PRIMARY KEY,
+                    username      TEXT NOT NULL DEFAULT 'guest',
+                    timestamp     TEXT NOT NULL,
+                    dataset       TEXT NOT NULL,
+                    topic         TEXT NOT NULL,
+                    difficulty    TEXT NOT NULL,
+                    time_seconds  REAL NOT NULL,
+                    passed        INTEGER NOT NULL,
+                    my_sql        TEXT
+                )
+            """)
+            cur.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'attempts' AND column_name = 'username'
+            """)
+            if not cur.fetchone():
+                cur.execute(
+                    "ALTER TABLE attempts ADD COLUMN username TEXT NOT NULL DEFAULT 'guest'"
+                )
+
+else:
+    @contextmanager
+    def _connection():
+        conn = sqlite3.connect(_DB_PATH)
+        try:
+            yield conn
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _q(sql: str) -> str:
+        return sql
+
+    def _execute(sql: str, params: tuple = ()) -> None:
+        with _connection() as conn:
+            conn.execute(sql, params)
+
+    def _fetchone(sql: str, params: tuple = ()):
+        with _connection() as conn:
+            return conn.execute(sql, params).fetchone()
+
+    def _fetchall(sql: str, params: tuple = ()):
+        with _connection() as conn:
+            return conn.execute(sql, params).fetchall()
+
+    def _read_df(sql: str, params: tuple = ()) -> pd.DataFrame:
+        with _connection() as conn:
+            return pd.read_sql_query(sql, conn, params=params)
+
+    def _init_schema() -> None:
+        with _connection() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    username      TEXT PRIMARY KEY,
+                    password_hash TEXT NOT NULL,
+                    created_at    TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS attempts (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username     TEXT NOT NULL DEFAULT 'guest',
+                    timestamp    TEXT NOT NULL,
+                    dataset      TEXT NOT NULL,
+                    topic        TEXT NOT NULL,
+                    difficulty   TEXT NOT NULL,
+                    time_seconds REAL NOT NULL,
+                    passed       INTEGER NOT NULL,
+                    my_sql       TEXT
+                )
+            """)
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(attempts)").fetchall()]
+            if "username" not in cols:
+                conn.execute(
+                    "ALTER TABLE attempts ADD COLUMN username TEXT NOT NULL DEFAULT 'guest'"
+                )
 
 
+_init_schema()
+
+
+# ── Password hashing ───────────────────────────────────────────────────────────
 def _hash_password(password: str, salt: bytes | None = None) -> str:
-    """Return a salted PBKDF2-SHA256 hash, encoded as 'pbkdf2$<salt_hex>$<hash_hex>'."""
+    """Salted PBKDF2-SHA256 → 'pbkdf2$<salt_hex>$<hash_hex>'."""
     if salt is None:
         salt = os.urandom(16)
     dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, _PBKDF2_ROUNDS)
@@ -56,7 +159,7 @@ def _hash_password(password: str, salt: bytes | None = None) -> str:
 
 
 def _verify_password(password: str, stored: str) -> bool:
-    """Constant-time verification. Supports legacy bare-sha256 hashes for migration."""
+    """Constant-time verification; supports legacy bare-sha256 hashes."""
     try:
         if stored.startswith("pbkdf2$"):
             _, salt_hex, hash_hex = stored.split("$")
@@ -64,7 +167,6 @@ def _verify_password(password: str, stored: str) -> bool:
                 "sha256", password.encode(), bytes.fromhex(salt_hex), _PBKDF2_ROUNDS
             ).hex()
             return hmac.compare_digest(candidate, hash_hex)
-        # Legacy unsalted sha256 (pre-upgrade accounts)
         return hmac.compare_digest(hashlib.sha256(password.encode()).hexdigest(), stored)
     except Exception:
         return False
@@ -75,40 +177,28 @@ def register_user(username: str, password: str) -> tuple[bool, str]:
     username = username.strip().lower()
     if not username or not password:
         return False, "Username and password are required."
-    conn = _get_conn()
-    existing = conn.execute(
-        "SELECT 1 FROM users WHERE username = ?", (username,)
-    ).fetchone()
-    if existing:
-        conn.close()
+    if _fetchone("SELECT 1 FROM users WHERE username = ?", (username,)):
         return False, "That username is taken."
-    conn.execute(
+    _execute(
         "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
         (username, _hash_password(password), _utcnow_iso()),
     )
-    conn.commit()
-    conn.close()
     return True, "Account created."
 
 
 def login_user(username: str, password: str) -> tuple[bool, str]:
     username = username.strip().lower()
-    conn = _get_conn()
-    row = conn.execute(
-        "SELECT password_hash FROM users WHERE username = ?", (username,)
-    ).fetchone()
+    row = _fetchone("SELECT password_hash FROM users WHERE username = ?", (username,))
     if not row:
         return False, "No account with that username."
     if not _verify_password(password, row[0]):
         return False, "Incorrect password."
     # Transparently upgrade legacy unsalted hashes on successful login
     if not row[0].startswith("pbkdf2$"):
-        conn.execute(
+        _execute(
             "UPDATE users SET password_hash = ? WHERE username = ?",
             (_hash_password(password), username),
         )
-        conn.commit()
-    conn.close()
     return True, "Signed in."
 
 
@@ -122,49 +212,34 @@ def log_attempt(
     passed: bool,
     my_sql: str,
 ) -> None:
-    conn = _get_conn()
-    conn.execute(
-        "INSERT INTO attempts (username, timestamp, dataset, topic, difficulty, time_seconds, passed, my_sql) "
+    _execute(
+        "INSERT INTO attempts "
+        "(username, timestamp, dataset, topic, difficulty, time_seconds, passed, my_sql) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (username, _utcnow_iso(), dataset, topic, difficulty, time_seconds, int(passed), my_sql),
     )
-    conn.commit()
-    conn.close()
 
 
 def get_stats(username: str) -> pd.DataFrame:
-    conn = _get_conn()
-    df = pd.read_sql_query(
+    return _read_df(
         """
         SELECT
             dataset,
             topic,
             COUNT(*) AS attempts,
             ROUND(AVG(passed) * 100, 1) AS pass_rate,
-            ROUND(AVG(time_seconds), 1) AS avg_time_seconds,
-            ROUND(
-                (SELECT AVG(time_seconds) FROM (
-                    SELECT time_seconds, ROW_NUMBER() OVER (ORDER BY time_seconds) AS rn, COUNT(*) OVER () AS cnt
-                    FROM attempts a2 WHERE a2.dataset = a.dataset AND a2.topic = a.topic AND a2.username = a.username
-                ) WHERE rn IN ((cnt+1)/2, (cnt+2)/2)
-                ), 1
-            ) AS median_time_seconds
-        FROM attempts a
+            ROUND(AVG(time_seconds), 1)  AS avg_time_seconds
+        FROM attempts
         WHERE username = ?
         GROUP BY dataset, topic
         ORDER BY pass_rate ASC
         """,
-        conn,
-        params=(username,),
+        (username,),
     )
-    conn.close()
-    return df
 
 
 def get_daily_stats(username: str) -> pd.DataFrame:
-    """Per-day attempts, passes, pass-rate %, and avg time for charting."""
-    conn = _get_conn()
-    df = pd.read_sql_query(
+    return _read_df(
         """
         SELECT
             substr(timestamp, 1, 10) AS day,
@@ -177,40 +252,32 @@ def get_daily_stats(username: str) -> pd.DataFrame:
         GROUP BY day
         ORDER BY day
         """,
-        conn,
-        params=(username,),
+        (username,),
     )
-    conn.close()
-    return df
 
 
 def get_streak(username: str) -> dict:
-    """Return {'current': int, 'best': int, 'today': int} from attempt days."""
     from datetime import date, timedelta
 
-    conn = _get_conn()
-    rows = conn.execute(
+    rows = _fetchall(
         "SELECT DISTINCT substr(timestamp, 1, 10) FROM attempts WHERE username = ?",
         (username,),
-    ).fetchall()
-    today_count = conn.execute(
+    )
+    today_count = _fetchone(
         "SELECT COUNT(*) FROM attempts WHERE username = ? "
         "AND substr(timestamp, 1, 10) = ?",
         (username, date.today().isoformat()),
-    ).fetchone()[0]
-    conn.close()
+    )[0]
 
     days = sorted({date.fromisoformat(r[0]) for r in rows if r[0]})
     if not days:
         return {"current": 0, "best": 0, "today": 0}
 
-    # Best streak: longest run of consecutive calendar days.
     best = run = 1
     for prev, cur in zip(days, days[1:]):
         run = run + 1 if (cur - prev).days == 1 else 1
         best = max(best, run)
 
-    # Current streak: consecutive days ending today or yesterday.
     today = date.today()
     current = 0
     if days[-1] in (today, today - timedelta(days=1)):
@@ -224,8 +291,7 @@ def get_streak(username: str) -> dict:
 
 
 def get_weakest_topic(username: str) -> tuple[str, str] | None:
-    conn = _get_conn()
-    row = conn.execute(
+    row = _fetchone(
         """
         SELECT dataset, topic, AVG(passed) AS pr
         FROM attempts
@@ -236,8 +302,7 @@ def get_weakest_topic(username: str) -> tuple[str, str] | None:
         LIMIT 1
         """,
         (username,),
-    ).fetchone()
-    conn.close()
+    )
     if row:
         return row[0], row[1]
     return None

@@ -15,6 +15,15 @@ except Exception:  # optional dependency — timer still works on interaction
 
 load_dotenv()
 
+# Streamlit Community Cloud stores secrets in st.secrets, not in the environment.
+# Promote DATABASE_URL to an env var before storage.py is imported so the backend
+# selection (Postgres vs SQLite) is made correctly at module-load time.
+try:
+    if "DATABASE_URL" in st.secrets and not os.environ.get("DATABASE_URL"):
+        os.environ["DATABASE_URL"] = st.secrets["DATABASE_URL"]
+except Exception:
+    pass
+
 from bank import load_bank, pick_question
 from datasets import DATASETS, ensure_datasets
 from db import get_connection, introspect_schema, result_diff, safe_execute
@@ -898,7 +907,7 @@ with st.sidebar:
         pressure_seconds = st.slider("Countdown (seconds)", 60, 600, 300, 30)
 
     # Sound + animation effects toggle
-    effects_on = st.toggle("🔊 Sound & animation", value=True)
+    effects_on = st.toggle("🔊 Sound", value=True)
     if effects_on:
         volume_pct = st.slider("Volume", 0, 100, 90, 1)
     else:
@@ -1401,9 +1410,8 @@ with tab_drill:
             )
 
         # Editor flourishes (run inside the Ace iframe): blend its background with
-        # the app, glow the frame on focus, and shower cursor sparks plus a
-        # mechanical-keyboard click as you type. Honours the "Sound & animation"
-        # toggle + volume slider.
+        # the app, glow the frame on focus, and play a mechanical-keyboard click
+        # as you type. Honours the "Sound" toggle + volume slider.
         _glimmer_flag = "true" if effects_on else "false"
         _click_vol = round((volume_pct or 0) / 100, 3)
         components.html(
@@ -1413,8 +1421,6 @@ with tab_drill:
                 const GLIMMERS = __GLIMMERS__;
                 const VOL = __CLICKVOL__;
                 const pdoc = window.parent.document;
-                // Hot spark palette: white-hot core fading to orange embers.
-                const COLORS = ['#ffffff','#fff2c4','#ffd27a','#ffae3d','#ff8a1e','#ff6a1a'];
                 const SKIP = ['Shift','Control','Alt','Meta','CapsLock','Escape','Tab',
                               'ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'];
                 function aceFrame() {
@@ -1442,7 +1448,7 @@ with tab_drill:
 
                     if (!GLIMMERS) return;
 
-                    // ── Mechanical-keyboard click (Web Audio), one per keystroke ──
+                    // ── Topre "thock" (Web Audio), one per keystroke ──
                     let ac = null;
                     function audio() {
                         if (ac) return ac;
@@ -1472,85 +1478,44 @@ with tab_drill:
                         const c = audio(); if (!c) return;
                         if (c.state === 'suspended' && c.resume) c.resume();
                         const t = c.currentTime;
-                        const v = VOL * (big ? 1.15 : 1);
-                        // 1) Sharp click transient — very short high-passed noise.
-                        const hp = c.createBiquadFilter(); hp.type = 'highpass';
-                        hp.frequency.value = 1900 + Math.random() * 700;
-                        noiseBurst(c, t, 0.012, 0.16 * v, hp);
-                        // 2) Plasticky clack — mid band-passed noise.
+                        const v = VOL * (big ? 1.12 : 1);
+                        // Topre: deep, rounded, hollow. The rubber dome dampens the
+                        // attack (no sharp click) and the housing adds low resonance.
+
+                        // 1) Soft dome tap — short LOW-passed noise (muted contact,
+                        //    not a clicky transient). Gives a little texture only.
+                        const lp = c.createBiquadFilter(); lp.type = 'lowpass';
+                        lp.frequency.value = 1300 + Math.random() * 300; lp.Q.value = 0.7;
+                        noiseBurst(c, t, 0.018, 0.045 * v, lp);
+                        // 2) Hollow housing resonance — band-passed noise, centred low.
                         const bp = c.createBiquadFilter(); bp.type = 'bandpass';
-                        bp.frequency.value = 700 + Math.random() * 350; bp.Q.value = 1.1;
-                        noiseBurst(c, t, 0.03, 0.07 * v, bp);
-                        // 3) Low thock body — short decaying triangle (deeper for big keys).
-                        const f0 = (big ? 110 : 165) + Math.random() * 50;
-                        const o = c.createOscillator(); o.type = 'triangle';
-                        o.frequency.setValueAtTime(f0 * 1.7, t);
-                        o.frequency.exponentialRampToValueAtTime(f0, t + 0.03);
+                        bp.frequency.value = 230 + Math.random() * 70; bp.Q.value = 3.2;
+                        noiseBurst(c, t, 0.06, 0.10 * v, bp);
+                        // 3) Deep thock body — low sine with a quick downward pitch drop.
+                        const f0 = (big ? 76 : 94) + Math.random() * 20;
+                        const o = c.createOscillator(); o.type = 'sine';
+                        o.frequency.setValueAtTime(f0 * 1.5, t);
+                        o.frequency.exponentialRampToValueAtTime(f0, t + 0.045);
                         const og = c.createGain();
                         og.gain.setValueAtTime(0.0001, t);
-                        og.gain.exponentialRampToValueAtTime(Math.max(0.0002, (big ? 0.14 : 0.11) * v), t + 0.004);
-                        og.gain.exponentialRampToValueAtTime(0.0001, t + (big ? 0.08 : 0.06));
+                        og.gain.exponentialRampToValueAtTime(Math.max(0.0002, (big ? 0.26 : 0.22) * v), t + 0.006);
+                        og.gain.exponentialRampToValueAtTime(0.0001, t + (big ? 0.15 : 0.12));
                         o.connect(og).connect(c.destination);
-                        o.start(t); o.stop(t + 0.1);
+                        o.start(t); o.stop(t + 0.2);
+                        // 4) Faint sub-octave — fills out the body for that deep thock.
+                        const sub = c.createOscillator(); sub.type = 'sine';
+                        sub.frequency.setValueAtTime(f0 * 0.5, t);
+                        const sg = c.createGain();
+                        sg.gain.setValueAtTime(0.0001, t);
+                        sg.gain.exponentialRampToValueAtTime(Math.max(0.0002, 0.09 * v), t + 0.008);
+                        sg.gain.exponentialRampToValueAtTime(0.0001, t + 0.1);
+                        sub.connect(sg).connect(c.destination);
+                        sub.start(t); sub.stop(t + 0.15);
                     }
 
-                    // Spark canvas overlaying the editor (clicks pass through).
-                    const cv = idoc.createElement('canvas');
-                    cv.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:9999';
-                    idoc.body.appendChild(cv);
-                    const ctx = cv.getContext('2d');
-                    const resize = () => { cv.width = iwin.innerWidth; cv.height = iwin.innerHeight; };
-                    resize(); iwin.addEventListener('resize', resize);
-
-                    let parts = [], raf = null;
-                    function star(s) {
-                        ctx.beginPath();
-                        for (let i = 0; i < 4; i++) {
-                            const a = i * Math.PI / 2;
-                            ctx.lineTo(Math.cos(a) * s, Math.sin(a) * s);
-                            ctx.lineTo(Math.cos(a + Math.PI / 4) * s * 0.34, Math.sin(a + Math.PI / 4) * s * 0.34);
-                        }
-                        ctx.closePath(); ctx.fill();
-                    }
-                    function loop() {
-                        ctx.clearRect(0, 0, cv.width, cv.height);
-                        for (const p of parts) {
-                            p.vy += 0.10; p.vx *= 0.95; p.vy *= 0.97;   // more gravity → spark shower
-                            p.x += p.vx; p.y += p.vy; p.life -= p.decay;
-                        }
-                        parts = parts.filter(p => p.life > 0);
-                        for (const p of parts) {
-                            ctx.save();
-                            ctx.globalAlpha = Math.max(0, p.life);
-                            ctx.fillStyle = p.color; ctx.shadowColor = p.color; ctx.shadowBlur = 10;
-                            if (p.star) { ctx.translate(p.x, p.y); ctx.rotate((1 - p.life) * 3); star(p.size * 1.8); }
-                            else { ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, 7); ctx.fill(); }
-                            ctx.restore();
-                        }
-                        raf = parts.length ? iwin.requestAnimationFrame(loop) : null;
-                    }
-                    function emit() {
-                        const cur = idoc.querySelector('.ace_cursor');
-                        let x = cv.width / 2, y = cv.height / 2;
-                        if (cur) { const r = cur.getBoundingClientRect(); x = r.right; y = r.top + r.height / 2; }
-                        const n = 5 + (Math.random() * 5 | 0);
-                        for (let i = 0; i < n; i++) {
-                            const ang = Math.random() * Math.PI * 2;
-                            const sp = 1.4 + Math.random() * 3.0;
-                            parts.push({
-                                x, y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp - 1.0,
-                                life: 1, decay: 0.02 + Math.random() * 0.025,
-                                size: 1.0 + Math.random() * 2.0,
-                                color: COLORS[(Math.random() * COLORS.length) | 0],
-                                star: Math.random() < 0.35
-                            });
-                        }
-                        if (!raf) raf = iwin.requestAnimationFrame(loop);
-                    }
                     idoc.addEventListener('keydown', function (e) {
                         if (e.ctrlKey || e.metaKey || e.altKey) return;
                         if (SKIP.includes(e.key)) return;
-                        emit();
                         keyclick(e.key === ' ' || e.key === 'Enter' || e.key === 'Backspace');
                     }, true);
                 }
@@ -1811,8 +1776,7 @@ with tab_stats:
         display_df["avg_time_seconds"] = display_df["avg_time_seconds"].apply(
             lambda x: f"{int(x//60):02d}:{int(x%60):02d}"
         )
-        display_df.columns = ["Dataset", "Topic", "Attempts", "Pass Rate", "Avg Time", "Median Time (raw)"]
-        display_df = display_df.drop(columns=["Median Time (raw)"])
+        display_df.columns = ["Dataset", "Topic", "Attempts", "Pass Rate", "Avg Time"]
         st.dataframe(display_df, use_container_width=True, hide_index=True)
 
         # Bar chart

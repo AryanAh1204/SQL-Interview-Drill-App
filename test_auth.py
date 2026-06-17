@@ -7,8 +7,9 @@ import pytest
 def storage(tmp_path, monkeypatch):
     import storage as storage_mod
     importlib.reload(storage_mod)
-    # Point the auth/history DB at a throwaway file per test
-    monkeypatch.setattr(storage_mod, "DB_PATH", tmp_path / "test.db")
+    # Point the auth/history DB at a throwaway file per test, then re-init schema.
+    monkeypatch.setattr(storage_mod, "_DB_PATH", tmp_path / "test.db")
+    storage_mod._init_schema()
     return storage_mod
 
 
@@ -36,10 +37,8 @@ def test_duplicate_username_rejected(storage):
 def test_hash_is_salted_and_not_plaintext(storage):
     storage.register_user("dave", "samepw")
     storage.register_user("erin", "samepw")
-    conn = storage._get_conn()
-    rows = dict(conn.execute("SELECT username, password_hash FROM users").fetchall())
-    conn.close()
-    # Salted: identical passwords -> different stored hashes; never plaintext.
+    rows = dict(storage._fetchall("SELECT username, password_hash FROM users"))
+    # Salted: identical passwords → different stored hashes; never plaintext.
     assert rows["dave"] != rows["erin"]
     assert "samepw" not in rows["dave"]
     assert rows["dave"].startswith("pbkdf2$")
