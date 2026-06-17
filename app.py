@@ -1048,10 +1048,13 @@ def play_animation(kind: str, volume: float = 0.9):
     if kind == "pass":
         js = audio_js + """
         const doc = window.parent.document;
+        doc.querySelectorAll('.sqldrill-fx').forEach(e => e.remove());  // clear any stuck one
         const cv = doc.createElement('canvas');
+        cv.className = 'sqldrill-fx';
         cv.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;pointer-events:none;z-index:99999';
         cv.width = window.parent.innerWidth; cv.height = window.parent.innerHeight;
         doc.body.appendChild(cv);
+        setTimeout(() => cv.remove(), 4000);  // hard safety net so it can never linger
         const ctx = cv.getContext('2d');
         const colors = ['#7aa2f7','#bb9af7','#9ece6a','#ff9e64','#f7768e','#e0af68'];
         const parts = [];
@@ -1085,12 +1088,15 @@ def play_animation(kind: str, volume: float = 0.9):
     else:
         js = audio_js + """
         const doc = window.parent.document;
+        doc.querySelectorAll('.sqldrill-fx').forEach(e => e.remove());  // clear any stuck one
         const el = doc.createElement('div');
+        el.className = 'sqldrill-fx';
         el.textContent = '👎';
         el.style.cssText = 'position:fixed;top:42%;left:-160px;font-size:130px;z-index:99999;'
             + 'pointer-events:none;filter:drop-shadow(0 6px 18px rgba(0,0,0,.5));'
             + 'transition:none;transform-origin:center';
         doc.body.appendChild(el);
+        setTimeout(() => el.remove(), 3800);  // hard safety net so it can never linger
         const start = performance.now(); const dur = 2600;
         const W = window.parent.innerWidth + 320;
         (function anim(t){
@@ -1104,7 +1110,20 @@ def play_animation(kind: str, volume: float = 0.9):
         })(start);
         """
     js = js.replace("__VOL__", str(vol))
-    components.html(f"<script>{js}</script>", height=0)
+    # Run the animation in the PARENT document rather than this throwaway component
+    # iframe: Streamlit tears the iframe down on the next rerun (e.g. a trailing
+    # timer autorefresh fires ~1s after grading), which would otherwise kill the
+    # requestAnimationFrame loop mid-flight and freeze the canvas it drew. Injecting
+    # an IIFE-wrapped script into the parent keeps the loop alive and self-cleaning;
+    # the IIFE avoids globals colliding across repeated plays.
+    import json as _json
+    wrapped = "(function(){\n" + js + "\n})();"
+    delivery = (
+        "try{var s=window.parent.document.createElement('script');"
+        "s.textContent=" + _json.dumps(wrapped) + ";"
+        "window.parent.document.body.appendChild(s);s.remove();}catch(e){}"
+    )
+    components.html(f"<script>{delivery}</script>", height=0)
 
 
 # ── Main tabs ──────────────────────────────────────────────────────────────────
