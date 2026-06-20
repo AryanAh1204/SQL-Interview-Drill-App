@@ -11,7 +11,7 @@ streamlit run app.py
 ```
 
 That's it — **no API key required to run**. The app ships with a pre-built bank of
-143 questions (`question_bank.json`), so it works forever with zero API cost.
+358 questions (`question_bank.json`), so it works forever with zero API cost.
 
 On first run it downloads three industry datasets (~5 MB total) into `data/`:
 - **Northwind** — B2B distribution (orders, customers, products)
