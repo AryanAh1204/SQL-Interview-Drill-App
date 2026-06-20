@@ -43,7 +43,7 @@ before being saved, so the bank never contains a broken question.
 ## Features
 
 - **Dark UI** (Tokyo Night palette) with ambient cursor glow + gradient hover effects
-- **143-question bank** grounded in real schemas — only valid columns used
+- **358-question bank** grounded in real schemas — only valid columns used
 - **8 SQL topics**: aggregation, GROUP BY+HAVING, CTEs, window functions, LAG/LEAD, running totals, JOINs, correlated subqueries
 - **Result-set grading**: correct answers with different SQL still pass
 - **Safety**: only SELECT/WITH allowed; mutations rejected
