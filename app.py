@@ -15,6 +15,16 @@ except Exception:  # optional dependency — timer still works on interaction
 
 load_dotenv()
 
+# set_page_config() must be the first Streamlit command — merely touching
+# st.secrets below renders a page element if no secrets file exists, which
+# would violate that if it ran first.
+st.set_page_config(
+    page_title="SQL Drill",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
 # Streamlit Community Cloud stores secrets in st.secrets, not in the environment.
 # Promote DATABASE_URL to an env var before storage.py is imported so the backend
 # selection (Postgres vs SQLite) is made correctly at module-load time.
@@ -37,14 +47,6 @@ from storage import (
     log_attempt,
     login_user,
     register_user,
-)
-
-# ── Page config ────────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="SQL Drill",
-    page_icon="⚡",
-    layout="wide",
-    initial_sidebar_state="expanded",
 )
 
 # ── Dark theme CSS + hover interactions ───────────────────────────────────────
@@ -582,43 +584,9 @@ hr {
     50%      { transform: translateY(-5px); }
 }
 
-/* ── Cursor glow trail (large ambient light that lights up the background) ── */
-#cursor-glow {
-    pointer-events: none;
-    position: fixed;
-    width: 380px; height: 380px;
-    border-radius: 50%;
-    background: radial-gradient(circle, #7aa2f730 0%, #bb9af718 35%, transparent 70%);
-    transform: translate(-50%, -50%);
-    transition: opacity 0.3s;
-    z-index: 0;
-    mix-blend-mode: screen;
-    filter: blur(8px);
-}
 </style>
 
 """, unsafe_allow_html=True)
-
-# Cursor glow — injected via components.html so the JS actually runs, then
-# attaches the glow elements + listener to the PARENT (main app) document.
-
-components.html(
-    """
-    <script>
-    const doc = window.parent.document;
-    if (!doc.getElementById('cursor-glow')) {
-        const glow = doc.createElement('div');
-        glow.id = 'cursor-glow';
-        doc.body.appendChild(glow);
-        doc.addEventListener('mousemove', e => {
-            glow.style.left = e.clientX + 'px';
-            glow.style.top  = e.clientY + 'px';
-        });
-    }
-    </script>
-    """,
-    height=0,
-)
 
 
 # ── 3D logo emblem ──────────────────────────────────────────────────────────────
