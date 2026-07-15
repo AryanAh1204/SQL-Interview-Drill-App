@@ -18,54 +18,72 @@ def _utcnow_iso() -> str:
 
 
 # ── Backend — Postgres when DATABASE_URL is set, else SQLite ──────────────────
+# Only connection setup and placeholder style differ; both DB-API modules
+# expose .cursor(), so one set of query helpers covers both.
 if _DATABASE_URL:
     import psycopg2
 
-    @contextmanager
-    def _connection():
-        conn = psycopg2.connect(_DATABASE_URL)
-        try:
-            yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+    def _connect():
+        return psycopg2.connect(_DATABASE_URL)
 
     def _q(sql: str) -> str:
         return sql.replace("?", "%s")
+else:
+    def _connect():
+        return sqlite3.connect(_DB_PATH)
 
-    def _execute(sql: str, params: tuple = ()) -> None:
-        with _connection() as conn:
-            conn.cursor().execute(_q(sql), params)
+    def _q(sql: str) -> str:
+        return sql
 
-    def _fetchone(sql: str, params: tuple = ()):
-        with _connection() as conn:
-            cur = conn.cursor()
-            cur.execute(_q(sql), params)
-            return cur.fetchone()
 
-    def _fetchall(sql: str, params: tuple = ()):
-        with _connection() as conn:
-            cur = conn.cursor()
-            cur.execute(_q(sql), params)
-            return cur.fetchall()
+@contextmanager
+def _connection():
+    conn = _connect()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
-    def _read_df(sql: str, params: tuple = ()) -> pd.DataFrame:
-        with _connection() as conn:
-            return pd.read_sql_query(_q(sql), conn, params=params)
 
-    def _init_schema() -> None:
-        with _connection() as conn:
-            cur = conn.cursor()
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    username      TEXT PRIMARY KEY,
-                    password_hash TEXT NOT NULL,
-                    created_at    TEXT NOT NULL
-                )
-            """)
+def _execute(sql: str, params: tuple = ()) -> None:
+    with _connection() as conn:
+        conn.cursor().execute(_q(sql), params)
+
+
+def _fetchone(sql: str, params: tuple = ()):
+    with _connection() as conn:
+        cur = conn.cursor()
+        cur.execute(_q(sql), params)
+        return cur.fetchone()
+
+
+def _fetchall(sql: str, params: tuple = ()):
+    with _connection() as conn:
+        cur = conn.cursor()
+        cur.execute(_q(sql), params)
+        return cur.fetchall()
+
+
+def _read_df(sql: str, params: tuple = ()) -> pd.DataFrame:
+    with _connection() as conn:
+        return pd.read_sql_query(_q(sql), conn, params=params)
+
+
+def _init_schema() -> None:
+    with _connection() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                username      TEXT PRIMARY KEY,
+                password_hash TEXT NOT NULL,
+                created_at    TEXT NOT NULL
+            )
+        """)
+        if _DATABASE_URL:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS attempts (
                     id            SERIAL PRIMARY KEY,
@@ -83,50 +101,9 @@ if _DATABASE_URL:
                 SELECT column_name FROM information_schema.columns
                 WHERE table_name = 'attempts' AND column_name = 'username'
             """)
-            if not cur.fetchone():
-                cur.execute(
-                    "ALTER TABLE attempts ADD COLUMN username TEXT NOT NULL DEFAULT 'guest'"
-                )
-
-else:
-    @contextmanager
-    def _connection():
-        conn = sqlite3.connect(_DB_PATH)
-        try:
-            yield conn
-            conn.commit()
-        finally:
-            conn.close()
-
-    def _q(sql: str) -> str:
-        return sql
-
-    def _execute(sql: str, params: tuple = ()) -> None:
-        with _connection() as conn:
-            conn.execute(sql, params)
-
-    def _fetchone(sql: str, params: tuple = ()):
-        with _connection() as conn:
-            return conn.execute(sql, params).fetchone()
-
-    def _fetchall(sql: str, params: tuple = ()):
-        with _connection() as conn:
-            return conn.execute(sql, params).fetchall()
-
-    def _read_df(sql: str, params: tuple = ()) -> pd.DataFrame:
-        with _connection() as conn:
-            return pd.read_sql_query(sql, conn, params=params)
-
-    def _init_schema() -> None:
-        with _connection() as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    username      TEXT PRIMARY KEY,
-                    password_hash TEXT NOT NULL,
-                    created_at    TEXT NOT NULL
-                )
-            """)
-            conn.execute("""
+            has_username = cur.fetchone() is not None
+        else:
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS attempts (
                     id           INTEGER PRIMARY KEY AUTOINCREMENT,
                     username     TEXT NOT NULL DEFAULT 'guest',
@@ -139,11 +116,12 @@ else:
                     my_sql       TEXT
                 )
             """)
-            cols = [r[1] for r in conn.execute("PRAGMA table_info(attempts)").fetchall()]
-            if "username" not in cols:
-                conn.execute(
-                    "ALTER TABLE attempts ADD COLUMN username TEXT NOT NULL DEFAULT 'guest'"
-                )
+            cur.execute("PRAGMA table_info(attempts)")
+            has_username = any(r[1] == "username" for r in cur.fetchall())
+        if not has_username:
+            cur.execute(
+                "ALTER TABLE attempts ADD COLUMN username TEXT NOT NULL DEFAULT 'guest'"
+            )
 
 
 _init_schema()
@@ -177,22 +155,26 @@ def register_user(username: str, password: str) -> tuple[bool, str]:
     username = username.strip().lower()
     if not username or not password:
         return False, "Username and password are required."
-    if _fetchone("SELECT 1 FROM users WHERE username = ?", (username,)):
+    try:
+        # ponytail: let the PRIMARY KEY constraint be the single source of
+        # truth for uniqueness instead of check-then-insert, closing the
+        # race where two concurrent registrations both pass a pre-check.
+        _execute(
+            "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
+            (username, _hash_password(password), _utcnow_iso()),
+        )
+    except Exception:
         return False, "That username is taken."
-    _execute(
-        "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
-        (username, _hash_password(password), _utcnow_iso()),
-    )
     return True, "Account created."
 
 
 def login_user(username: str, password: str) -> tuple[bool, str]:
     username = username.strip().lower()
     row = _fetchone("SELECT password_hash FROM users WHERE username = ?", (username,))
-    if not row:
-        return False, "No account with that username."
-    if not _verify_password(password, row[0]):
-        return False, "Incorrect password."
+    # Same message whether the account doesn't exist or the password is
+    # wrong, so login responses can't be used to enumerate usernames.
+    if not row or not _verify_password(password, row[0]):
+        return False, "Incorrect username or password."
     # Transparently upgrade legacy unsalted hashes on successful login
     if not row[0].startswith("pbkdf2$"):
         _execute(
@@ -282,8 +264,9 @@ def get_streak(username: str) -> dict:
     current = 0
     if days[-1] in (today, today - timedelta(days=1)):
         current = 1
-        for prev, cur in zip(reversed(days), reversed(days[:-1])):
-            if (prev - cur).days == 1:
+        rev = days[::-1]
+        for cur, prev in zip(rev, rev[1:]):
+            if (cur - prev).days == 1:
                 current += 1
             else:
                 break
