@@ -1,6 +1,7 @@
 import os
 import random
 import re
+import threading
 import time
 from pathlib import Path
 
@@ -34,6 +35,7 @@ try:
 except Exception:
     pass
 
+import aptitude
 from bank import load_bank, pick_question
 from datasets import DATASETS, ensure_datasets
 from db import get_connection, introspect_schema, result_diff, safe_execute
@@ -52,54 +54,51 @@ from storage import (
 # ── Dark theme CSS + hover interactions ───────────────────────────────────────
 st.markdown("""
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
 <style>
+:root {
+    --color-bg: #161826;
+    --color-surface: #232532;
+    --color-text: #e9e9ed;
+    --color-accent: #9184d9;
+    --color-accent-2: #a7a1db;
+    --color-divider: rgba(233,233,237,0.16);
+    --color-neutral-400: #b2b6ca;
+    --color-neutral-600: #75798c;
+    --color-neutral-800: #3f424d;
+    --color-success: oklch(0.72 0.09 152);
+    --color-warning: oklch(0.75 0.09 75);
+    --color-danger: oklch(0.68 0.11 18);
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 14px;
+}
+
 /* ── Base ── */
 html, body, [class*="css"] {
-    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace !important;
+    font-family: 'Inter', system-ui, sans-serif !important;
 }
 .stApp {
-    background:
-        radial-gradient(900px circle at 10% -8%, #7aa2f722, transparent 45%),
-        radial-gradient(820px circle at 95% 2%, #bb9af71e, transparent 45%),
-        radial-gradient(1100px circle at 50% 118%, #9ece6a14, transparent 52%),
-        #0b0b1a !important;
-    background-attachment: fixed !important;
-    color: #c0caf5 !important;
+    background: var(--color-bg) !important;
+    color: var(--color-text) !important;
 }
 .stApp > header {
     background: transparent !important;
 }
-/* Faint grid texture for depth — masked so it fades toward the edges. */
-.stApp::before {
-    content: "";
-    position: fixed;
-    inset: 0;
-    background-image:
-        linear-gradient(#7aa2f70a 1px, transparent 1px),
-        linear-gradient(90deg, #7aa2f70a 1px, transparent 1px);
-    background-size: 46px 46px;
-    pointer-events: none;
-    z-index: 0;
-    -webkit-mask-image: radial-gradient(ellipse 75% 55% at 50% 25%, #000 35%, transparent 100%);
-            mask-image: radial-gradient(ellipse 75% 55% at 50% 25%, #000 35%, transparent 100%);
-}
-/* Keep app content above the grid + cursor glow layers. */
-[data-testid="stAppViewContainer"] .main,
-[data-testid="stMain"] { position: relative; z-index: 1; }
 
 /* ── Sidebar ── */
 [data-testid="stSidebar"] {
-    background: #0d0e1c !important;
-    border-right: 1px solid #2a2d3e !important;
+    background: var(--color-surface) !important;
+    border-right: 1px solid var(--color-divider) !important;
 }
 /* Pull sidebar content flush to the very top (kill Streamlit's default gap). */
 [data-testid="stSidebar"] > div:first-child { padding-top: 0 !important; }
 [data-testid="stSidebarHeader"] { padding-top: 0.4rem !important; padding-bottom: 0 !important; min-height: 0 !important; }
 [data-testid="stSidebarUserContent"] { padding-top: 0.4rem !important; }
 [data-testid="stSidebar"] .block-container { padding-top: 0.4rem !important; }
-[data-testid="stSidebar"] * { color: #c0caf5 !important; }
+[data-testid="stSidebar"] * { color: var(--color-text) !important; }
 
 /* ── Sidebar schema dropdown tree (native <details>) ── */
 details.schema-dd { margin: 0.2rem 0 0.4rem 0; }
@@ -117,138 +116,126 @@ details.schema-table > summary::-webkit-details-marker { display: none; }
 /* Outer "N tables" dropdown header */
 details.schema-dd > summary {
     padding: 0.5rem 0.8rem;
-    background: #1a1b2e;
-    border: 1px solid #2a2d3e;
-    border-radius: 8px;
-    color: #7aa2f7 !important;
+    background: var(--color-bg);
+    border: 1px solid var(--color-divider);
+    border-radius: var(--radius-md);
+    color: var(--color-accent) !important;
     font-size: 0.78rem;
-    font-weight: 700;
+    font-weight: 500;
     letter-spacing: 0.04em;
-    transition: border-color 0.2s, background 0.25s, box-shadow 0.25s;
+    transition: border-color 0.2s, background 0.2s;
 }
 details.schema-dd > summary::after {
     content: "▾";
     margin-left: auto;
-    color: #565f89;
+    color: var(--color-neutral-600);
     transition: transform 0.25s;
 }
 details.schema-dd[open] > summary::after { transform: rotate(180deg); }
 details.schema-dd > summary:hover {
-    border-color: #7aa2f7;
-    background: linear-gradient(135deg, #1a1b2e, #232544);
-    box-shadow: 0 0 14px #7aa2f740;
+    border-color: var(--color-accent);
+    background: color-mix(in srgb, var(--color-accent) 7%, transparent);
 }
 .schema-body { padding: 0.4rem 0 0.1rem 0.3rem; }
 /* Inner per-table dropdown */
 details.schema-table { margin: 0.15rem 0; }
 details.schema-table > summary {
     padding: 0.32rem 0.6rem;
-    border-left: 2px solid #2a2d3e;
+    border-left: 2px solid var(--color-divider);
     border-radius: 0 6px 6px 0;
-    color: #c0caf5 !important;
+    color: var(--color-text) !important;
     font-size: 0.76rem;
     transition: background 0.15s, border-color 0.15s, padding-left 0.15s;
 }
 details.schema-table > summary::after {
     content: "▸";
     margin-left: auto;
-    color: #565f89;
+    color: var(--color-neutral-600);
     transition: transform 0.2s;
 }
 details.schema-table[open] > summary::after { transform: rotate(90deg); }
 details.schema-table > summary:hover {
-    background: #7aa2f712;
-    border-left-color: #7aa2f7;
+    background: color-mix(in srgb, var(--color-accent) 7%, transparent);
+    border-left-color: var(--color-accent);
     padding-left: 0.85rem;
 }
-details.schema-table[open] > summary { color: #7aa2f7 !important; border-left-color: #7aa2f7; }
+details.schema-table[open] > summary { color: var(--color-accent) !important; border-left-color: var(--color-accent); }
 .schema-cols { margin: 0.1rem 0 0.35rem 0.9rem; }
+.schema-cols td { font-family: 'JetBrains Mono', ui-monospace, monospace !important; }
 
 [data-testid="stSidebar"] .stSelectbox label,
 [data-testid="stSidebar"] .stRadio label,
 [data-testid="stSidebar"] .stSlider label {
-    color: #7aa2f7 !important;
+    color: var(--color-neutral-400) !important;
     font-size: 0.78rem !important;
     letter-spacing: 0.08em !important;
     text-transform: uppercase !important;
 }
 
 /* ── Headings ── */
-h1 { color: #7aa2f7 !important; text-shadow: 0 0 30px #7aa2f740; }
-h2 { color: #bb9af7 !important; }
-h3 { color: #9ece6a !important; }
+h1, h2, h3 { color: var(--color-text) !important; font-weight: 500 !important; }
 
 /* ── Buttons ── */
 .stButton > button {
-    background: linear-gradient(135deg, #7aa2f7, #bb9af7, #9ece6a) !important;
-    background-size: 200% 200% !important;
-    background-position: 0% 50% !important;
-    color: #0f0f23 !important;
-    border: none !important;
-    border-radius: 8px !important;
-    font-family: 'JetBrains Mono', monospace !important;
-    font-weight: 700 !important;
-    letter-spacing: 0.05em !important;
-    padding: 0.5rem 1.4rem !important;
-    transition: background-position 0.6s ease, transform 0.2s ease, box-shadow 0.2s ease !important;
-    box-shadow: 0 0 0px transparent !important;
+    background: transparent !important;
+    color: var(--color-accent) !important;
+    border: 1px solid var(--color-accent) !important;
+    border-radius: var(--radius-md) !important;
+    font-family: 'Inter', system-ui, sans-serif !important;
+    font-weight: 500 !important;
+    letter-spacing: 0.02em !important;
+    padding: 0.45rem 1.2rem !important;
+    transition: background 0.15s ease !important;
+    box-shadow: none !important;
 }
 .stButton > button:hover {
-    background-position: 100% 50% !important;
-    transform: translateY(-2px) scale(1.03) !important;
-    box-shadow: 0 0 26px #7aa2f790, 0 0 50px #bb9af740, 0 4px 16px #00000060 !important;
+    background: color-mix(in srgb, var(--color-accent) 12%, transparent) !important;
     cursor: pointer !important;
 }
 .stButton > button:active {
-    transform: translateY(0) scale(0.98) !important;
+    background: color-mix(in srgb, var(--color-accent) 22%, transparent) !important;
 }
 .stButton > button:disabled {
     opacity: 0.45 !important;
-    filter: grayscale(0.4) !important;
     cursor: not-allowed !important;
-    box-shadow: none !important;
-    transform: none !important;
 }
 
 /* ── Text inputs / text areas ── */
 .stTextArea textarea, .stTextInput input {
-    background: #1a1b2e !important;
-    color: #c0caf5 !important;
-    border: 1px solid #2a2d3e !important;
-    border-radius: 8px !important;
-    font-family: 'JetBrains Mono', monospace !important;
-    caret-color: #7aa2f7 !important;
-    transition: border-color 0.2s, box-shadow 0.2s !important;
+    background: var(--color-surface) !important;
+    color: var(--color-text) !important;
+    border: 1px solid var(--color-divider) !important;
+    border-radius: var(--radius-md) !important;
+    caret-color: var(--color-accent) !important;
+    transition: border-color 0.2s !important;
 }
+.stTextArea textarea { font-family: 'JetBrains Mono', ui-monospace, monospace !important; }
+.stTextInput input { font-family: 'Inter', system-ui, sans-serif !important; }
 .stTextArea textarea:focus, .stTextInput input:focus {
-    border-color: #7aa2f7 !important;
-    box-shadow: 0 0 0 2px #7aa2f730, 0 0 16px #7aa2f720 !important;
+    border-color: var(--color-accent) !important;
+    box-shadow: none !important;
 }
 .stTextArea textarea:hover, .stTextInput input:hover {
-    border-color: #565f89 !important;
+    border-color: var(--color-neutral-600) !important;
 }
 
-/* ── Code editor (streamlit-ace iframe) frame + focus glow ── */
+/* ── Code editor (streamlit-ace iframe) frame ── */
 iframe[src*="streamlit_ace"] {
-    border-radius: 12px !important;
-    border: 1px solid #2a2d3e !important;
-    box-shadow: 0 8px 26px rgba(0,0,0,0.32) !important;
-    transition: border-color 0.25s, box-shadow 0.25s !important;
+    border-radius: var(--radius-md) !important;
+    border: 1px solid var(--color-divider) !important;
+    transition: border-color 0.2s !important;
 }
 iframe.editor-focused[src*="streamlit_ace"] {
-    border-color: #7aa2f7 !important;
-    box-shadow: 0 0 0 2px rgba(122,162,247,0.22),
-                0 0 28px rgba(122,162,247,0.28),
-                0 8px 26px rgba(0,0,0,0.38) !important;
+    border-color: var(--color-accent) !important;
 }
 
 /* ── Selectbox / dropdowns ── */
 [data-testid="stSelectbox"] > div > div {
-    background: #1a1b2e !important;
-    border: 1px solid #2a2d3e !important;
-    border-radius: 8px !important;
-    color: #c0caf5 !important;
-    transition: border-color 0.2s, background 0.3s, box-shadow 0.3s !important;
+    background: var(--color-surface) !important;
+    border: 1px solid var(--color-divider) !important;
+    border-radius: var(--radius-md) !important;
+    color: var(--color-text) !important;
+    transition: border-color 0.2s !important;
     cursor: pointer !important;
 }
 /* Make the whole selectbox area clickable + pointer cursor */
@@ -258,9 +245,7 @@ iframe.editor-focused[src*="streamlit_ace"] {
     cursor: pointer !important;
 }
 [data-testid="stSelectbox"] > div > div:hover {
-    border-color: #7aa2f7 !important;
-    background: linear-gradient(135deg, #1a1b2e, #232544) !important;
-    box-shadow: 0 0 18px #7aa2f750, inset 0 0 20px #7aa2f712 !important;
+    border-color: var(--color-accent) !important;
 }
 
 /* ── Dropdown menu options ── */
@@ -268,15 +253,14 @@ iframe.editor-focused[src*="streamlit_ace"] {
 [data-baseweb="popover"] li,
 [role="option"] {
     cursor: pointer !important;
-    transition: background 0.15s, color 0.15s, padding-left 0.15s !important;
+    transition: background 0.15s, padding-left 0.15s !important;
 }
 [data-baseweb="menu"] li:hover,
 [data-baseweb="popover"] li:hover,
 [role="option"]:hover {
-    background: linear-gradient(90deg, #7aa2f730, #bb9af720) !important;
-    color: #c0caf5 !important;
+    background: color-mix(in srgb, var(--color-accent) 10%, transparent) !important;
+    color: var(--color-text) !important;
     padding-left: 1.2rem !important;
-    box-shadow: inset 3px 0 0 #7aa2f7 !important;
 }
 
 /* ── Radio buttons (difficulty) — pointer + hover ── */
@@ -285,7 +269,7 @@ iframe.editor-focused[src*="streamlit_ace"] {
     cursor: pointer !important;
 }
 [data-testid="stRadio"] label:hover {
-    color: #7aa2f7 !important;
+    color: var(--color-accent) !important;
 }
 
 /* ── Toggle + generic clickable widgets ── */
@@ -298,84 +282,53 @@ label[data-baseweb="checkbox"] * {
 /* ── Cards (custom HTML divs) ── */
 .drill-card {
     position: relative;
-    background: linear-gradient(180deg, rgba(26,27,46,0.82), rgba(20,21,36,0.66));
-    backdrop-filter: blur(12px) saturate(120%);
-    -webkit-backdrop-filter: blur(12px) saturate(120%);
-    border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 16px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-divider);
+    border-left: 2px solid var(--color-accent);
+    border-radius: var(--radius-md);
     padding: 1.4rem 1.6rem;
     margin-bottom: 1rem;
     overflow: hidden;
-    /* Soft drop shadow + a subtle inner top-edge sheen for the glass look. */
-    box-shadow: 0 10px 30px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.06);
-    transition: border-color 0.25s, transform 0.25s, box-shadow 0.25s, background 0.4s;
-    animation: slideIn 0.4s ease;
+    box-shadow: 0 0 0 1px var(--color-neutral-800);
+    animation: cardIn 0.4s ease;
 }
-/* Animated gradient sweep that reveals on hover */
-.drill-card::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(120deg, #7aa2f710, #bb9af712, #9ece6a10);
-    background-size: 200% 200%;
-    opacity: 0;
-    transition: opacity 0.4s;
-    pointer-events: none;
-    animation: gradientShift 6s ease infinite;
-}
-.drill-card:hover::before { opacity: 1; }
-.drill-card:hover {
-    border-color: #7aa2f7;
-    transform: translateY(-3px);
-    box-shadow: 0 8px 32px #7aa2f730, 0 0 0 1px #7aa2f740, 0 0 60px #bb9af715;
-}
-@keyframes gradientShift {
-    0%   { background-position: 0% 50%; }
-    50%  { background-position: 100% 50%; }
-    100% { background-position: 0% 50%; }
-}
-@keyframes slideIn {
-    from { opacity: 0; transform: translateY(12px); }
+@keyframes cardIn {
+    from { opacity: 0; transform: translateY(10px); }
     to   { opacity: 1; transform: translateY(0); }
 }
 
 /* ── Badges ── */
 .badge {
     display: inline-block;
-    padding: 2px 12px;
-    border-radius: 20px;
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
-    transition: transform 0.15s, box-shadow 0.15s;
+    padding: 3px 10px;
+    border-radius: calc(var(--radius-md) * 0.75);
+    font-size: 0.68rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
     cursor: default;
 }
-.badge:hover { transform: scale(1.08); box-shadow: 0 0 12px currentColor; }
-.badge-easy   { background: #9ece6a22; color: #9ece6a; border: 1px solid #9ece6a60; }
-.badge-medium { background: #ff9e6422; color: #ff9e64; border: 1px solid #ff9e6460; }
-.badge-hard   { background: #f7768e22; color: #f7768e; border: 1px solid #f7768e60; }
-.badge-topic  { background: #7aa2f722; color: #7aa2f7; border: 1px solid #7aa2f760; }
-.badge-ds     { background: #bb9af722; color: #bb9af7; border: 1px solid #bb9af760; }
+.badge-easy   { background: color-mix(in srgb, var(--color-success) 16%, transparent); color: var(--color-success); }
+.badge-medium { background: color-mix(in srgb, var(--color-warning) 16%, transparent); color: var(--color-warning); }
+.badge-hard   { background: color-mix(in srgb, var(--color-danger) 16%, transparent); color: var(--color-danger); }
+.badge-topic  { background: var(--color-neutral-800); color: var(--color-text); }
+.badge-ds     { background: color-mix(in srgb, var(--color-accent) 22%, transparent); color: var(--color-accent); }
 
 /* ── Timer ── */
 .timer-display {
     font-size: 2.4rem;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    color: #7aa2f7;
-    text-shadow: 0 0 18px #7aa2f750;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    color: var(--color-accent);
     font-variant-numeric: tabular-nums;
-    transition: color 0.3s, text-shadow 0.3s;
+    transition: color 0.3s;
 }
 .timer-pressure {
-    color: #f7768e !important;
-    text-shadow: 0 0 24px #f7768e70 !important;
+    color: var(--color-danger) !important;
     animation: pulse-glow 1s ease-in-out infinite alternate;
 }
 @keyframes pulse-glow {
-    from { text-shadow: 0 0 10px #f7768e50; }
-    to   { text-shadow: 0 0 30px #f7768e90; }
+    from { opacity: 1; }
+    to   { opacity: 0.6; }
 }
 /* Pin the timer column to the viewport so it stays visible while scrolling.
    The column is identified by the .timer-anchor marker we render inside it.
@@ -399,189 +352,141 @@ label[data-baseweb="checkbox"] * {
     }
 }
 .timer-card {
-    background: rgba(20,21,36,0.88);
-    backdrop-filter: blur(12px) saturate(120%);
-    -webkit-backdrop-filter: blur(12px) saturate(120%);
-    border: 1px solid rgba(255,255,255,0.09);
-    border-radius: 14px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-divider);
+    border-radius: var(--radius-lg);
     padding: 0.7rem 0.9rem;
     text-align: center;
-    box-shadow: 0 12px 32px rgba(0,0,0,0.4);
+    box-shadow: 0 0 0 1px var(--color-neutral-800);
 }
 .timer-status { font-size: 0.62rem; letter-spacing: 0.06em; margin-top: 0.15rem; }
 
 /* ── Result banners ── */
 .result-pass {
-    background: linear-gradient(90deg, #9ece6a22, #9ece6a0a);
-    border: 1px solid #9ece6a55;
-    border-left: 4px solid #9ece6a;
-    border-radius: 10px;
+    background: color-mix(in srgb, var(--color-success) 10%, var(--color-surface));
+    border-left: 3px solid var(--color-success);
+    border-radius: var(--radius-md);
     padding: 0.8rem 1.2rem;
-    color: #9ece6a;
-    font-weight: 700;
-    box-shadow: 0 6px 22px #9ece6a1f;
-    animation: bannerPop 0.35s ease;
+    color: var(--color-success);
+    font-weight: 500;
+    animation: cardIn 0.35s ease;
 }
 .result-fail {
-    background: linear-gradient(90deg, #f7768e22, #f7768e0a);
-    border: 1px solid #f7768e55;
-    border-left: 4px solid #f7768e;
-    border-radius: 10px;
+    background: color-mix(in srgb, var(--color-danger) 10%, var(--color-surface));
+    border-left: 3px solid var(--color-danger);
+    border-radius: var(--radius-md);
     padding: 0.8rem 1.2rem;
-    color: #f7768e;
-    font-weight: 700;
-    box-shadow: 0 6px 22px #f7768e1f;
-    animation: bannerPop 0.35s ease;
-}
-@keyframes bannerPop {
-    0%   { transform: scale(0.95); opacity: 0; }
-    60%  { transform: scale(1.02); }
-    100% { transform: scale(1);    opacity: 1; }
+    color: var(--color-danger);
+    font-weight: 500;
+    animation: cardIn 0.35s ease;
 }
 
 /* ── Progress bar ── */
 .stProgress > div > div {
-    background: linear-gradient(90deg, #7aa2f7, #bb9af7) !important;
+    background: var(--color-accent) !important;
     border-radius: 4px !important;
-    transition: all 0.3s !important;
 }
 .stProgress > div {
-    background: #2a2d3e !important;
+    background: var(--color-neutral-800) !important;
     border-radius: 4px !important;
 }
 
 /* ── Expander ── */
 [data-testid="stExpander"] {
-    background: #1a1b2e !important;
-    border: 1px solid #2a2d3e !important;
-    border-radius: 10px !important;
+    background: var(--color-surface) !important;
+    border: 1px solid var(--color-divider) !important;
+    border-radius: var(--radius-md) !important;
     transition: border-color 0.2s !important;
 }
 [data-testid="stExpander"]:hover {
-    border-color: #565f89 !important;
+    border-color: var(--color-neutral-600) !important;
 }
-[data-testid="stExpander"] summary { color: #7aa2f7 !important; }
+[data-testid="stExpander"] summary { color: var(--color-accent) !important; }
 
-/* ── Tabs (pill style inside a translucent rail) ── */
+/* ── Tabs (plain text + accent underline, per the nocturne design) ── */
 div[data-baseweb="tab-list"] {
-    background: rgba(26,27,46,0.55) !important;
-    backdrop-filter: blur(8px) !important;
-    -webkit-backdrop-filter: blur(8px) !important;
-    border: 1px solid rgba(255,255,255,0.06) !important;
-    border-radius: 12px !important;
-    padding: 4px !important;
-    gap: 4px !important;
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    gap: 26px !important;
 }
 button[data-baseweb="tab"] {
     background: transparent !important;
-    color: #565f89 !important;
+    color: var(--color-neutral-600) !important;
     border: none !important;
-    border-radius: 9px !important;
-    padding: 0.35rem 1rem !important;
-    font-weight: 600 !important;
+    padding: 4px 0 !important;
+    font-weight: 500 !important;
     letter-spacing: 0.03em !important;
-    transition: color 0.2s, background 0.25s, box-shadow 0.25s !important;
+    transition: color 0.2s !important;
 }
-button[data-baseweb="tab"]:hover { color: #7aa2f7 !important; background: rgba(122,162,247,0.08) !important; }
-button[data-baseweb="tab"][aria-selected="true"] {
-    color: #0f0f23 !important;
-    background: linear-gradient(135deg, #7aa2f7, #bb9af7) !important;
-    box-shadow: 0 4px 16px rgba(122,162,247,0.35) !important;
-}
-/* Hide the default underline highlight bar — the pill carries the active state. */
-div[data-baseweb="tab-highlight"], div[data-baseweb="tab-border"] { display: none !important; }
+button[data-baseweb="tab"]:hover { color: var(--color-accent) !important; }
+button[data-baseweb="tab"][aria-selected="true"] { color: var(--color-text) !important; }
+div[data-baseweb="tab-highlight"] { background: var(--color-accent) !important; height: 2px !important; }
+div[data-baseweb="tab-border"] { display: none !important; }
 
 /* ── Metric cards ── */
 [data-testid="stMetric"] {
-    background: linear-gradient(180deg, rgba(26,27,46,0.82), rgba(20,21,36,0.6));
-    border: 1px solid rgba(255,255,255,0.07);
-    border-radius: 14px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-divider);
+    border-radius: var(--radius-md);
     padding: 0.9rem 1.1rem;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.05);
-    transition: border-color 0.25s, transform 0.25s, box-shadow 0.25s;
-}
-[data-testid="stMetric"]:hover {
-    border-color: #7aa2f7;
-    transform: translateY(-3px);
-    box-shadow: 0 14px 34px rgba(122,162,247,0.22), inset 0 1px 0 rgba(255,255,255,0.08);
+    box-shadow: 0 0 0 1px var(--color-neutral-800);
 }
 [data-testid="stMetricLabel"] p {
-    color: #7aa2f7 !important;
+    color: var(--color-accent) !important;
     font-size: 0.74rem !important;
     letter-spacing: 0.05em !important;
     text-transform: uppercase !important;
 }
-[data-testid="stMetricValue"] { color: #c0caf5 !important; font-weight: 700 !important; }
+[data-testid="stMetricValue"] { color: var(--color-text) !important; font-weight: 500 !important; }
 
 /* ── Dataframe / table ── */
 [data-testid="stDataFrame"] {
-    border: 1px solid #2a2d3e !important;
-    border-radius: 8px !important;
+    border: 1px solid var(--color-divider) !important;
+    border-radius: var(--radius-md) !important;
     overflow: hidden !important;
 }
 [data-testid="stDataFrame"] th {
-    background: #1a1b2e !important;
-    color: #7aa2f7 !important;
+    background: var(--color-surface) !important;
+    color: var(--color-accent) !important;
 }
 [data-testid="stDataFrame"] tr:hover td {
-    background: #7aa2f710 !important;
+    background: color-mix(in srgb, var(--color-accent) 6%, transparent) !important;
 }
 
-/* ── Divider (gradient hairline that fades at both ends) ── */
+/* ── Divider ── */
 hr {
     border: none !important;
     height: 1px !important;
-    background: linear-gradient(90deg, transparent, #2a2d3e 20%, #565f8966 50%, #2a2d3e 80%, transparent) !important;
+    background: var(--color-divider) !important;
     margin: 0.7rem 0 !important;
+}
+
+/* ── Kill Streamlit's "stale element" rerun-dim ── the 1s timer autorefresh
+   (st_autorefresh) reruns the script every second while a question is active,
+   and Streamlit fades pending elements to partial opacity during any rerun
+   that takes >~0.5s — read as a constant brightness pulse against this flat
+   dark theme. The content is already correct on every tick, so suppress it. */
+.stale-element, [data-stale="true"] {
+    opacity: 1 !important;
+    transition: none !important;
 }
 
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #0f0f23; }
-::-webkit-scrollbar-thumb { background: #2a2d3e; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #7aa2f7; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-neutral-800); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-accent); }
 
-/* ── 3D logo emblem (app-icon style: glossy gradient tile + beveled bolt) ── */
+/* ── Logo emblem (flat bordered tile, per the nocturne design) ── */
 .logo-badge {
-    position: relative;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border-radius: 30%;
-    background: linear-gradient(150deg, #9fbcff 0%, #7aa2f7 30%, #bb9af7 66%, #9ece6a 100%);
-    box-shadow:
-        0 12px 24px rgba(0,0,0,0.5),
-        0 3px 8px rgba(122,162,247,0.55),
-        inset 0 2px 3px rgba(255,255,255,0.6),
-        inset 0 -5px 10px rgba(40,30,90,0.45);
-    animation: logoFloat 3.6s ease-in-out infinite;
-    transition: box-shadow 0.3s ease, filter 0.3s ease;
-}
-/* Glossy diagonal sheen across the top half. */
-.logo-badge::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    background: linear-gradient(158deg, rgba(255,255,255,0.45) 0%, rgba(255,255,255,0.05) 42%, transparent 60%);
-    pointer-events: none;
-}
-.logo-badge svg {
-    position: relative;
-    z-index: 1;
-    filter: drop-shadow(0 2px 2px rgba(15,15,35,0.55));
-}
-.logo-badge:hover {
-    box-shadow:
-        0 18px 32px rgba(0,0,0,0.55),
-        0 5px 16px rgba(122,162,247,0.7),
-        inset 0 2px 3px rgba(255,255,255,0.65),
-        inset 0 -5px 10px rgba(40,30,90,0.45);
-    filter: brightness(1.08);
-}
-@keyframes logoFloat {
-    0%, 100% { transform: translateY(0); }
-    50%      { transform: translateY(-5px); }
+    border-radius: 22%;
+    border: 1px solid var(--color-accent);
+    background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+    color: var(--color-accent);
 }
 
 </style>
@@ -602,8 +507,34 @@ def logo_emblem(size: int = 46) -> str:
         f'<svg viewBox="0 0 24 24" width="{bolt}" height="{bolt}" '
         f'xmlns="http://www.w3.org/2000/svg">'
         f'<path d="M14 1.8 L4.5 13.6 H10.4 L8.9 22.2 L19.5 9.6 H12.7 L14 1.8 Z" '
-        f'fill="#10122a"/></svg></span>'
+        f'fill="currentColor"/></svg></span>'
     )
+
+
+# ── Line-art icon set (paths lifted straight from the nocturne design) ──────────
+_ICONS = {
+    "bolt":     ("fill", 'M152 16 L56 144 h56 l-16 96 96-128 h-56 Z'),
+    "mic":      ("stroke", '<rect x="100" y="24" width="56" height="120" rx="28"/><path d="M60 128 a 68 68 0 0 0 136 0"/><line x1="128" y1="196" x2="128" y2="228"/>'),
+    "bars":     ("stroke", '<line x1="52" y1="208" x2="52" y2="152"/><line x1="112" y1="208" x2="112" y2="88"/><line x1="172" y1="208" x2="172" y2="120"/><line x1="228" y1="208" x2="228" y2="56"/>'),
+    "database": ("stroke", '<ellipse cx="128" cy="64" rx="80" ry="28"/><path d="M48 64 v 128 c 0 15.5 35.8 28 80 28 s 80 -12.5 80 -28 V 64"/><path d="M48 128 c 0 15.5 35.8 28 80 28 s 80 -12.5 80 -28"/>'),
+    "table":    ("stroke", '<rect x="40" y="48" width="176" height="160" rx="8"/><line x1="40" y1="100" x2="216" y2="100"/><line x1="112" y1="100" x2="112" y2="208"/>'),
+    "person":   ("stroke", '<circle cx="128" cy="96" r="48"/><path d="M40 216 a 96 74 0 0 1 176 0"/>'),
+    "check":    ("stroke", '<polyline points="40 140 96 196 216 72"/>'),
+    "x":        ("stroke", '<line x1="56" y1="56" x2="200" y2="200"/><line x1="200" y1="56" x2="56" y2="200"/>'),
+    "warning":  ("stroke", '<path d="M128 40 L 232 208 H 24 Z"/><line x1="128" y1="112" x2="128" y2="152"/><circle cx="128" cy="180" r="4" fill="currentColor"/>'),
+    "brain":    ("stroke", '<path d="M136 24 c 8 40 -40 56 -40 96 a 16 20 0 0 0 32 4 c 28 16 40 40 40 60 a 40 44 0 0 1 -80 0 c 0 -20 8 -28 8 -28 s -32 12 -32 44 a 64 60 0 0 0 128 0 c 0 -72 -64 -96 -56 -176 Z"/>'),
+}
+
+
+def icon(name: str, size: int = 14, color: str = "currentColor") -> str:
+    """Inline SVG for one of `_ICONS`, styled to match the nocturne design's line-art set."""
+    kind, body = _ICONS[name]
+    if kind == "fill":
+        return (f'<svg width="{size}" height="{size}" viewBox="0 0 256 256" fill="{color}" '
+                f'style="display:inline;vertical-align:-0.15em"><path d="{body}"/></svg>')
+    return (f'<svg width="{size}" height="{size}" viewBox="0 0 256 256" fill="none" stroke="{color}" '
+            f'stroke-width="16" stroke-linecap="round" stroke-linejoin="round" '
+            f'style="display:inline;vertical-align:-0.15em">{body}</svg>')
 
 
 # ── Session state init ─────────────────────────────────────────────────────────
@@ -637,6 +568,16 @@ def _init_state():
         "mock_results": [],
         "mock_overall_start": None,
         "mock_q_start": None,
+        # Aptitude tab (questions generated live via NVIDIA NIM)
+        "apt_q": None,
+        "apt_nonce": 0,
+        "apt_graded": False,
+        "apt_correct": None,
+        "apt_start": None,
+        "apt_seen": [],      # recent question texts, fed back to the model to avoid repeats
+        "apt_error": None,
+        "apt_buf": {},       # (topic, difficulty) -> list of ready questions
+        "apt_threads": {},   # (topic, difficulty) -> live prefetch thread
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -687,16 +628,29 @@ def get_anthropic_client():
     return anthropic.Anthropic(api_key=key)
 
 
+# ── NVIDIA NIM key (used by the Aptitude tab) ──────────────────────────────────
+# Same env-then-secrets lookup as the Anthropic key, so it works identically in
+# local dev (.env) and on a host that injects secrets (Streamlit Cloud, HF Spaces).
+def get_nvidia_key() -> str:
+    key = os.getenv("NVIDIA_API_KEY", "")
+    if not key:
+        try:
+            key = st.secrets.get("NVIDIA_API_KEY", "")
+        except Exception:
+            key = ""
+    return key
+
+
 # ── Sign-in gate ───────────────────────────────────────────────────────────────
 def render_login():
     st.markdown(
         f"""<div style="text-align:center; padding:2rem 0 1rem 0;">
             <div style="margin-bottom:0.7rem;">{logo_emblem(64)}</div>
             <div style="font-size:1.8rem; font-weight:700;
-                background:linear-gradient(135deg,#7aa2f7,#bb9af7);
+                background:linear-gradient(135deg,var(--color-accent),var(--color-accent-2));
                 -webkit-background-clip:text; -webkit-text-fill-color:transparent;
                 letter-spacing:0.1em;">SQL DRILL</div>
-            <div style="font-size:0.8rem; color:#565f89; letter-spacing:0.2em;">SIGN IN TO TRACK YOUR PROGRESS</div>
+            <div style="font-size:0.8rem; color:var(--color-neutral-600); letter-spacing:0.2em;">SIGN IN TO TRACK YOUR PROGRESS</div>
         </div>""",
         unsafe_allow_html=True,
     )
@@ -769,13 +723,13 @@ def schema_tree_html(tables, schema, summary, open_default=False) -> str:
     for table in tables:
         rows = "".join(
             f"<tr>"
-            f"<td style='padding:2px 8px 2px 0; color:#c0caf5; font-size:0.74rem; white-space:nowrap;'>{c}</td>"
-            f"<td style='padding:2px 0; color:#565f89; font-size:0.68rem; text-align:right;'>{t}</td>"
+            f"<td style='padding:2px 8px 2px 0; color:var(--color-text); font-size:0.74rem; white-space:nowrap;'>{c}</td>"
+            f"<td style='padding:2px 0; color:var(--color-neutral-600); font-size:0.68rem; text-align:right;'>{t}</td>"
             f"</tr>"
             for c, t in schema.get(table, [])
         )
         inner += (
-            f"<details class='schema-table'><summary>🗂 {table}</summary>"
+            f"<details class='schema-table'><summary>{icon('table')} {table}</summary>"
             f"<table class='schema-cols' style='width:100%; border-collapse:collapse;'>{rows}</table>"
             f"</details>"
         )
@@ -804,19 +758,19 @@ with st.sidebar:
     <div style="text-align:center; padding: 0.4rem 0 0.6rem 0;">
         <div style="margin-bottom:0.5rem;">{logo_emblem(48)}</div>
         <div style="font-size:1.3rem; font-weight:700;
-            background:linear-gradient(135deg,#7aa2f7,#bb9af7);
+            background:linear-gradient(135deg,var(--color-accent),var(--color-accent-2));
             -webkit-background-clip:text; -webkit-text-fill-color:transparent;
             letter-spacing:0.1em;">SQL DRILL</div>
-        <div style="font-size:0.7rem; color:#565f89; letter-spacing:0.15em;">INTERVIEW PREP</div>
+        <div style="font-size:0.7rem; color:var(--color-neutral-600); letter-spacing:0.15em;">INTERVIEW PREP</div>
     </div>
     """, unsafe_allow_html=True)
 
     # User badge + sign out
     st.markdown(
         f"""<div style="display:flex; align-items:center; justify-content:space-between;
-            background:#1a1b2e; border:1px solid #2a2d3e; border-radius:8px;
+            background:var(--color-bg); border:1px solid var(--color-divider); border-radius:8px;
             padding:0.4rem 0.8rem; margin-bottom:0.6rem;">
-            <span style="font-size:0.8rem; color:#9ece6a;">👤 {username}</span>
+            <span style="font-size:0.8rem; color:var(--color-text);">{icon('person')} {username}</span>
         </div>""",
         unsafe_allow_html=True,
     )
@@ -828,10 +782,7 @@ with st.sidebar:
 
     # Dataset picker
     ds_options = list(available_datasets.keys())
-    ds_labels = {
-        ds_id: f"{DATASETS[ds_id]['emoji']}  {ds_id.title()}"
-        for ds_id in ds_options
-    }
+    ds_labels = {ds_id: ds_id.title() for ds_id in ds_options}
     selected_ds = st.selectbox(
         "DATASET",
         ds_options,
@@ -847,7 +798,7 @@ with st.sidebar:
         schema_tree_html(
             list(schema.keys()),
             schema,
-            f"{ds_meta_side['emoji']} {selected_ds.title()} · {len(schema)} tables",
+            f"{icon('database')} {selected_ds.title()} · {len(schema)} tables",
             open_default=True,
         ),
         unsafe_allow_html=True,
@@ -857,7 +808,7 @@ with st.sidebar:
 
     # Topic picker
     weakest = get_weakest_topic(username)
-    topic_options = ["🎯 Target my weakness"] + TOPICS
+    topic_options = ["Target my weakness"] + TOPICS
     topic_label = st.selectbox("TOPIC", topic_options)
 
     # Difficulty
@@ -870,12 +821,12 @@ with st.sidebar:
     st.markdown("<hr>", unsafe_allow_html=True)
 
     # Pressure mode
-    pressure_mode = st.toggle("⏱ Pressure Mode", value=False)
+    pressure_mode = st.toggle("Pressure Mode", value=False)
     if pressure_mode:
         pressure_seconds = st.slider("Countdown (seconds)", 60, 600, 300, 30)
 
     # Sound + animation effects toggle
-    effects_on = st.toggle("🔊 Sound", value=True)
+    effects_on = st.toggle("Sound", value=True)
     if effects_on:
         volume_pct = st.slider("Volume", 0, 100, 90, 1)
     else:
@@ -886,8 +837,8 @@ with st.sidebar:
     # Dataset description
     meta = DATASETS[selected_ds]
     st.markdown(
-        f"""<div style="font-size:0.72rem; color:#565f89; line-height:1.6;">
-        <span style="color:{meta['color']};font-weight:700;">{meta['emoji']} {selected_ds.title()}</span><br>
+        f"""<div style="font-size:0.72rem; color:var(--color-neutral-600); line-height:1.6;">
+        <span style="color:var(--color-accent);font-weight:700;">{icon('database')} {selected_ds.title()}</span><br>
         {meta['description']}
         </div>""",
         unsafe_allow_html=True,
@@ -901,9 +852,9 @@ with st.sidebar:
         avg = st.session_state.sess_time / tot
         rate = round(passed / tot * 100)
         st.markdown(
-            f"""<div style="font-size:0.72rem; color:#565f89; line-height:1.7;">
-            <span style="color:#7aa2f7; font-weight:700; letter-spacing:0.06em;">THIS SESSION</span><br>
-            {tot} attempted · <span style="color:#9ece6a;">{passed} passed</span> ({rate}%)<br>
+            f"""<div style="font-size:0.72rem; color:var(--color-neutral-600); line-height:1.7;">
+            <span style="color:var(--color-accent); font-weight:700; letter-spacing:0.06em;">THIS SESSION</span><br>
+            {tot} attempted · <span style="color:var(--color-success);">{passed} passed</span> ({rate}%)<br>
             avg {int(avg // 60):02d}:{int(avg % 60):02d} per question
             </div>""",
             unsafe_allow_html=True,
@@ -1039,7 +990,7 @@ def play_animation(kind: str, volume: float = 0.9):
         doc.body.appendChild(cv);
         setTimeout(() => cv.remove(), 4000);  // hard safety net so it can never linger
         const ctx = cv.getContext('2d');
-        const colors = ['#7aa2f7','#bb9af7','#9ece6a','#ff9e64','#f7768e','#e0af68'];
+        const colors = ['#b5abfc','#968ae0','#d2cefd','#a7a1db','#e4e7f5','#796cbf'];
         const parts = [];
         // Two cracker bursts from the lower corners
         [[0.15,1],[0.85,1]].forEach(([fx,fy]) => {
@@ -1110,7 +1061,9 @@ def play_animation(kind: str, volume: float = 0.9):
 
 
 # ── Main tabs ──────────────────────────────────────────────────────────────────
-tab_drill, tab_mock, tab_stats = st.tabs(["⚡  Drill", "🎤  Mock Interview", "📊  Stats"])
+tab_drill, tab_mock, tab_apt, tab_stats = st.tabs(
+    ["⚡  Drill", "🎤  Mock Interview", "🧠  Aptitude", "📊  Stats"]
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1120,7 +1073,7 @@ with tab_drill:
     col_main, col_timer = st.columns([3, 1])
 
     with col_main:
-        _accent = meta.get("color", "#7aa2f7")
+        _accent = "var(--color-accent)"
         st.markdown(
             f"""<div style="position:relative; padding:1.1rem 1.4rem; margin-bottom:1.2rem;
                 border-radius:16px; overflow:hidden;
@@ -1129,12 +1082,12 @@ with tab_drill:
                 box-shadow:inset 4px 0 0 {_accent}, 0 8px 26px rgba(0,0,0,0.25);">
                 <div style="font-size:0.7rem; letter-spacing:0.18em; color:{_accent};
                     text-transform:uppercase; font-weight:700; margin-bottom:0.15rem;">
-                    {meta['emoji']} {selected_ds.title()}</div>
+                    {icon('database')} {selected_ds.title()}</div>
                 <div style="font-size:1.55rem; font-weight:800; line-height:1.2;
-                    background:linear-gradient(135deg, #c0caf5, {_accent});
+                    background:linear-gradient(135deg, var(--color-text), {_accent});
                     -webkit-background-clip:text; -webkit-text-fill-color:transparent;">
                     {DATASETS[selected_ds]['industry']}</div>
-                <div style="font-size:0.8rem; color:#565f89; margin-top:0.35rem; line-height:1.6;">
+                <div style="font-size:0.8rem; color:var(--color-neutral-600); margin-top:0.35rem; line-height:1.6;">
                     {DATASETS[selected_ds]['description'][:120]}…</div>
             </div>""",
             unsafe_allow_html=True,
@@ -1190,8 +1143,8 @@ with tab_drill:
 
     if gen_clicked:
         # Resolve topic (None = any topic)
-        actual_topic = None if topic_label == "🎯 Target my weakness" else topic_label
-        if topic_label == "🎯 Target my weakness":
+        actual_topic = None if topic_label == "Target my weakness" else topic_label
+        if topic_label == "Target my weakness":
             w = get_weakest_topic(username)
             actual_topic = w[1] if w else None
 
@@ -1244,10 +1197,10 @@ with tab_drill:
                 <span class="badge {diff_class}">{q['difficulty']}</span>&nbsp;
                 <span class="badge badge-topic">{q['topic']}</span>
             </div>
-            <div style="color:#565f89; font-size:0.8rem; font-style:italic; margin-bottom:0.8rem; line-height:1.6;">
+            <div style="color:var(--color-neutral-600); font-size:0.8rem; font-style:italic; margin-bottom:0.8rem; line-height:1.6;">
                 {q['business_context']}
             </div>
-            <div style="font-size:1.05rem; font-weight:500; color:#c0caf5; line-height:1.7;">
+            <div style="font-size:1.05rem; font-weight:500; color:var(--color-text); line-height:1.7;">
                 {q['question']}
             </div>
             </div>""",
@@ -1265,7 +1218,7 @@ with tab_drill:
                 schema_tree_html(
                     _rel,
                     schema,
-                    f"📋 Relevant tables for this question · {len(_rel)}",
+                    f"{icon('table')} Relevant tables for this question · {len(_rel)}",
                     open_default=False,
                 ),
                 unsafe_allow_html=True,
@@ -1297,11 +1250,11 @@ with tab_drill:
         mins, secs = int(elapsed) // 60, int(elapsed) % 60
 
         if not st.session_state.t_started:
-            status = "<span style='color:#565f89;'>⌨ starts when you type</span>"
+            status = "<span style='color:var(--color-neutral-600);'>⌨ starts when you type</span>"
         elif st.session_state.t_running:
-            status = "<span style='color:#9ece6a;'>● running</span>"
+            status = "<span style='color:var(--color-success);'>● running</span>"
         else:
-            status = "<span style='color:#e0af68;'>⏸ paused</span>"
+            status = "<span style='color:var(--color-warning);'>⏸ paused</span>"
 
         if pressure_mode:
             remaining = max(0, pressure_seconds - int(elapsed))
@@ -1311,7 +1264,7 @@ with tab_drill:
             timer_slot.markdown(
                 f"""<div class="timer-card">
                     <div class="{timer_cls}" style="font-size:1.9rem;">{rem_m:02d}:{rem_s:02d}</div>
-                    <div style="font-size:0.62rem; color:#565f89;">remaining</div>
+                    <div style="font-size:0.62rem; color:var(--color-neutral-600);">remaining</div>
                     <div class="timer-status">{status}</div>
                 </div>""",
                 unsafe_allow_html=True,
@@ -1322,7 +1275,7 @@ with tab_drill:
             timer_slot.markdown(
                 f"""<div class="timer-card">
                     <div class="timer-display" style="font-size:1.9rem;">{mins:02d}:{secs:02d}</div>
-                    <div style="font-size:0.62rem; color:#565f89;">elapsed</div>
+                    <div style="font-size:0.62rem; color:var(--color-neutral-600);">elapsed</div>
                     <div class="timer-status">{status}</div>
                 </div>""",
                 unsafe_allow_html=True,
@@ -1352,9 +1305,9 @@ with tab_drill:
         st.markdown(
             """<div style="display:flex; align-items:center; gap:0.6rem; margin:0.2rem 0 0.35rem 0;">
                 <span style="font-size:0.72rem; letter-spacing:0.14em; text-transform:uppercase;
-                    color:#7aa2f7; font-weight:700;">⌨ SQL Editor</span>
-                <span style="flex:1; height:1px; background:linear-gradient(90deg,#2a2d3e,transparent);"></span>
-                <span style="font-size:0.66rem; color:#565f89;">⌘/Ctrl+↵ to run</span>
+                    color:var(--color-accent); font-weight:700;">⌨ SQL Editor</span>
+                <span style="flex:1; height:1px; background:linear-gradient(90deg,var(--color-divider),transparent);"></span>
+                <span style="font-size:0.66rem; color:var(--color-neutral-600);">⌘/Ctrl+↵ to run</span>
             </div>""",
             unsafe_allow_html=True,
         )
@@ -1405,9 +1358,11 @@ with tab_drill:
 
                     // Blend the editor + gutter background with the dark app shell.
                     const sx = idoc.createElement('style');
+                    // Iframe has its own document — CSS vars from the parent :root don't
+                    // cross the boundary, so these are literal nocturne hex values.
                     sx.textContent =
-                        '.ace_editor{background:#15162a !important;}' +
-                        '.ace_gutter{background:#101124 !important;color:#565f89 !important;}';
+                        '.ace_editor{background:#161826 !important;}' +
+                        '.ace_gutter{background:#161826 !important;color:#75798c !important;}';
                     (idoc.head || idoc.body).appendChild(sx);
 
                     // Focus glow toggles a class on the iframe element (parent doc).
@@ -1607,20 +1562,20 @@ with tab_drill:
             if gr["passed"]:
                 st.markdown(
                     f"""<div class="result-pass">
-                    ✅ &nbsp;<strong>CORRECT</strong> — {gr['reason']}
+                    {icon('check')} &nbsp;<strong>CORRECT</strong> — {gr['reason']}
                     </div>""",
                     unsafe_allow_html=True,
                 )
                 if st.session_state.feedback:
                     with st.expander("💬 Interviewer Feedback", expanded=True):
                         st.markdown(
-                            f"<div style='color:#c0caf5; line-height:1.7;'>{st.session_state.feedback}</div>",
+                            f"<div style='color:var(--color-text); line-height:1.7;'>{st.session_state.feedback}</div>",
                             unsafe_allow_html=True,
                         )
             else:
                 st.markdown(
                     f"""<div class="result-fail">
-                    ❌ &nbsp;<strong>INCORRECT</strong> — {gr['reason']}
+                    {icon('x')} &nbsp;<strong>INCORRECT</strong> — {gr['reason']}
                     </div>""",
                     unsafe_allow_html=True,
                 )
@@ -1660,15 +1615,15 @@ with tab_drill:
                     components.html(
                         f"""
                         <button id="copybtn" style="
-                            background:linear-gradient(135deg,#7aa2f7,#bb9af7); color:#0f0f23;
-                            border:none; border-radius:8px; padding:6px 14px; font-weight:700;
-                            font-family:monospace; cursor:pointer;">📋 Copy SQL</button>
+                            background:transparent; color:#9184d9;
+                            border:1px solid #9184d9; border-radius:8px; padding:6px 14px; font-weight:500;
+                            font-family:sans-serif; cursor:pointer;">Copy SQL</button>
                         <script>
                         const b = document.getElementById('copybtn');
                         b.addEventListener('click', async () => {{
-                            try {{ await navigator.clipboard.writeText({_sql_lit}); b.textContent = '✅ Copied'; }}
-                            catch (e) {{ b.textContent = '⚠ Copy failed'; }}
-                            setTimeout(() => b.textContent = '📋 Copy SQL', 1500);
+                            try {{ await navigator.clipboard.writeText({_sql_lit}); b.textContent = 'Copied'; }}
+                            catch (e) {{ b.textContent = 'Copy failed'; }}
+                            setTimeout(() => b.textContent = 'Copy SQL', 1500);
                         }});
                         </script>
                         """,
@@ -1687,9 +1642,9 @@ with tab_drill:
 
     else:
         st.markdown(
-            """<div class="drill-card" style="text-align:center; padding:2.5rem; color:#565f89;">
-            <div style="font-size:2.5rem; margin-bottom:0.5rem;">⚡</div>
-            <div style="font-size:1.1rem; color:#7aa2f7; font-weight:600;">Ready to drill?</div>
+            """<div class="drill-card" style="text-align:center; padding:2.5rem; color:var(--color-neutral-600);">
+            <div style="font-size:2.5rem; margin-bottom:0.5rem;">""" + icon("bolt", size=40) + """</div>
+            <div style="font-size:1.1rem; color:var(--color-accent); font-weight:600;">Ready to drill?</div>
             <div style="margin-top:0.4rem;">Pick a topic and difficulty in the sidebar, then click New Question.</div>
             </div>""",
             unsafe_allow_html=True,
@@ -1700,7 +1655,7 @@ with tab_drill:
 # STATS TAB
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_stats:
-    st.markdown(f"<h2>📊 {username.title()}'s Progress</h2>", unsafe_allow_html=True)
+    st.markdown(f"<h2>{icon('bars', size=22)} {username.title()}'s Progress</h2>", unsafe_allow_html=True)
 
     # ── Streaks ────────────────────────────────────────────────────────────────
     streak = get_streak(username)
@@ -1718,7 +1673,7 @@ with tab_stats:
 
     if stats_df.empty:
         st.markdown(
-            """<div class="drill-card" style="text-align:center; padding:2rem; color:#565f89;">
+            """<div class="drill-card" style="text-align:center; padding:2rem; color:var(--color-neutral-600);">
             <div style="font-size:1.8rem; margin-bottom:0.4rem;">📭</div>
             No attempts yet. Head to the Drill tab and solve some questions!
             </div>""",
@@ -1728,12 +1683,12 @@ with tab_stats:
         if weakest:
             wds, wtopic = weakest
             st.markdown(
-                f"""<div class="drill-card" style="border-color:#f7768e60; background:#f7768e08;">
-                <strong style="color:#f7768e;">⚠ Weakest Area:</strong>
-                <span style="color:#c0caf5; margin-left:0.5rem;">{wtopic}</span>
-                <span style="color:#565f89; font-size:0.8rem; margin-left:0.5rem;">on {wds}</span>
-                <br><span style="font-size:0.78rem; color:#565f89; margin-top:0.3rem; display:block;">
-                Set topic to "🎯 Target my weakness" to focus here.</span>
+                f"""<div class="drill-card" style="border-color:color-mix(in srgb, var(--color-danger) 38%, transparent); background:color-mix(in srgb, var(--color-danger) 3%, var(--color-surface));">
+                <strong style="color:var(--color-danger);">{icon('warning')} Weakest Area:</strong>
+                <span style="color:var(--color-text); margin-left:0.5rem;">{wtopic}</span>
+                <span style="color:var(--color-neutral-600); font-size:0.8rem; margin-left:0.5rem;">on {wds}</span>
+                <br><span style="font-size:0.78rem; color:var(--color-neutral-600); margin-top:0.3rem; display:block;">
+                Set topic to "Target my weakness" in the sidebar to focus here.</span>
                 </div>""",
                 unsafe_allow_html=True,
             )
@@ -1757,13 +1712,13 @@ with tab_stats:
         if len(daily) >= 2:
             st.markdown("<h3>Accuracy Over Time</h3>", unsafe_allow_html=True)
             acc = daily.set_index("day")[["pass_rate"]].rename(columns={"pass_rate": "Pass Rate %"})
-            st.line_chart(acc, color="#9ece6a")
+            st.line_chart(acc, color="#79b589")  # literal hex: Vega-Lite spec, not live CSS
 
             st.markdown("<h3>Practice Volume</h3>", unsafe_allow_html=True)
             vol = daily.set_index("day")[["attempts", "passed"]].rename(
                 columns={"attempts": "Attempts", "passed": "Passed"}
             )
-            st.bar_chart(vol, color=["#7aa2f7", "#9ece6a"])
+            st.bar_chart(vol, color=["#968ae0", "#79b589"])  # literal hex: Vega-Lite spec, not live CSS
 
         # Per-dataset breakdown
         st.markdown("<h3>Attempts by Dataset</h3>", unsafe_allow_html=True)
@@ -1774,24 +1729,195 @@ with tab_stats:
         )
         for _, row in ds_summary.iterrows():
             ds_id = row["dataset"]
-            ds_meta = DATASETS.get(ds_id, {})
-            emoji = ds_meta.get("emoji", "📦")
-            color = ds_meta.get("color", "#7aa2f7")
             st.markdown(
-                f"""<div class="drill-card" style="border-color:{color}40; display:inline-block; width:100%;">
-                <span style="color:{color}; font-weight:700;">{emoji} {ds_id.title()}</span>
-                <span style="color:#565f89; font-size:0.8rem; margin-left:0.8rem;">{int(row['attempts'])} attempts</span>
-                <span style="color:#9ece6a; font-size:0.9rem; margin-left:0.8rem; font-weight:600;">{row['pass_rate']:.1f}% pass rate</span>
+                f"""<div class="drill-card" style="border-color:color-mix(in srgb, var(--color-accent) 25%, transparent); display:inline-block; width:100%;">
+                <span style="color:var(--color-accent); font-weight:700;">{icon('database')} {ds_id.title()}</span>
+                <span style="color:var(--color-neutral-600); font-size:0.8rem; margin-left:0.8rem;">{int(row['attempts'])} attempts</span>
+                <span style="color:var(--color-success); font-size:0.9rem; margin-left:0.8rem; font-weight:600;">{row['pass_rate']:.1f}% pass rate</span>
                 </div>""",
                 unsafe_allow_html=True,
             )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# APTITUDE TAB
+# ═══════════════════════════════════════════════════════════════════════════════
+# Questions here are generated live via NVIDIA NIM rather than served from a
+# static bank: there is no schema to ground them in and no reference query to
+# execute, so there is nothing to validate ahead of time the way build_bank.py
+# does for SQL. Grading is an exact index match — no API call needed to score.
+with tab_apt:
+    st.markdown(f"<h2>{icon('brain', size=22)} Aptitude</h2>", unsafe_allow_html=True)
+
+    _nv_key = get_nvidia_key()
+    if not _nv_key:
+        st.markdown(
+            f"""<div class="drill-card" style="border-color:color-mix(in srgb, var(--color-warning) 38%, transparent);">
+            <strong style="color:var(--color-warning);">{icon('warning')} No NVIDIA API key found</strong>
+            <div style="margin-top:0.5rem; color:var(--color-neutral-600); font-size:0.85rem; line-height:1.7;">
+            Aptitude questions are generated on demand, so this tab needs a key.
+            Add <code>NVIDIA_API_KEY</code> to your local <code>.env</code>, or to the host's
+            secrets when deployed. Get one free at
+            <a href="https://build.nvidia.com" target="_blank">build.nvidia.com</a>.
+            </div></div>""",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            "<div style='color:var(--color-neutral-600); font-size:0.85rem; line-height:1.7; margin-bottom:0.6rem;'>"
+            "Placement-style multiple choice, generated fresh each time — so you never "
+            "run out and never memorise the bank.</div>",
+            unsafe_allow_html=True,
+        )
+
+        # Each topic is its own section, picked here rather than in the sidebar
+        # (the sidebar's dataset/topic controls belong to the SQL drill).
+        apt_topic = st.radio(
+            "SECTION",
+            list(aptitude.TOPICS.keys()),
+            horizontal=True,
+            key="apt_topic",
+        )
+        apt_diff = st.radio(
+            "DIFFICULTY",
+            aptitude.DIFFICULTIES,
+            horizontal=True,
+            key="apt_diff",
+        )
+
+        gen_col, _ = st.columns([1, 3])
+        with gen_col:
+            apt_clicked = st.button(
+                "🧠 New Question", use_container_width=True, key="apt_new"
+            )
+
+        # Ready-question buffer, keyed so switching section doesn't discard work
+        # already done for the previous one.
+        _apt_key = (apt_topic, apt_diff)
+        _apt_buf = st.session_state.apt_buf.setdefault(_apt_key, [])
+
+        def _apt_prefetch():
+            """Top the buffer up on a worker thread, if one isn't already running."""
+            live = st.session_state.apt_threads.get(_apt_key)
+            if live is not None and live.is_alive():
+                return
+            t = threading.Thread(
+                target=aptitude.fill_buffer,
+                args=(_apt_buf, apt_topic, apt_diff, _nv_key, list(st.session_state.apt_seen)),
+                daemon=True,
+            )
+            st.session_state.apt_threads[_apt_key] = t
+            t.start()
+
+        if _apt_buf:
+            st.caption(f"{len(_apt_buf)} more ready")
+
+        if apt_clicked:
+            st.session_state.apt_error = None
+            try:
+                if _apt_buf:
+                    q = _apt_buf.pop(0)          # instant — prefetched earlier
+                else:
+                    with st.spinner(f"Generating a {apt_diff} {apt_topic} question…"):
+                        q = aptitude.generate_question(
+                            topic=apt_topic,
+                            difficulty=apt_diff,
+                            api_key=_nv_key,
+                            avoid=st.session_state.apt_seen,
+                        )
+                st.session_state.apt_q = q
+                st.session_state.apt_nonce += 1
+                st.session_state.apt_graded = False
+                st.session_state.apt_correct = None
+                st.session_state.apt_start = time.time()
+                # Keep the avoid-list bounded; only the tail is sent anyway.
+                st.session_state.apt_seen = (
+                    st.session_state.apt_seen + [q["question"]]
+                )[-20:]
+                _apt_prefetch()  # refill in the background for the next click
+            except Exception as e:
+                st.session_state.apt_error = str(e)
+
+        if st.session_state.apt_error:
+            st.error(st.session_state.apt_error)
+
+        aq = st.session_state.apt_q
+        if aq:
+            st.markdown(
+                f"""<div class="drill-card">
+                <div style="margin-bottom:0.6rem;">
+                    <span class="badge badge-ds">{aq['topic']}</span>&nbsp;
+                    <span class="badge badge-{aq['difficulty']}">{aq['difficulty']}</span>
+                </div>
+                <div style="font-size:1.05rem; font-weight:500; color:var(--color-text); line-height:1.7;">
+                    {aq['question']}
+                </div>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+
+            _n = st.session_state.apt_nonce
+            choice = st.radio(
+                "Your answer",
+                options=list(range(4)),
+                format_func=lambda i: aq["options"][i],
+                key=f"apt_choice_{_n}",
+                disabled=st.session_state.apt_graded,
+            )
+
+            if not st.session_state.apt_graded:
+                sub_col, _ = st.columns([1, 3])
+                with sub_col:
+                    if st.button("▶ Submit Answer", use_container_width=True, key=f"apt_submit_{_n}"):
+                        elapsed = time.time() - (st.session_state.apt_start or time.time())
+                        passed = choice == aq["answer_index"]
+                        st.session_state.apt_graded = True
+                        st.session_state.apt_correct = passed
+                        # Reuses the SQL attempts table — `dataset` is free text, so
+                        # aptitude rows flow into the existing Stats tab unchanged.
+                        log_attempt(
+                            username=username,
+                            dataset="aptitude",
+                            topic=aq["topic"],
+                            difficulty=aq["difficulty"],
+                            time_seconds=elapsed,
+                            passed=passed,
+                            my_sql=aq["options"][choice],
+                        )
+                        if effects_on:
+                            st.session_state.animate = "pass" if passed else "fail"
+                        st.rerun()
+            else:
+                if st.session_state.animate:
+                    if effects_on:
+                        play_animation(st.session_state.animate, volume=volume_pct / 100)
+                    st.session_state.animate = None
+
+                correct_text = aq["options"][aq["answer_index"]]
+                if st.session_state.apt_correct:
+                    st.markdown(
+                        f"""<div class="result-pass">
+                        {icon('check')} &nbsp;<strong>CORRECT</strong> — {correct_text}
+                        </div>""",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        f"""<div class="result-fail">
+                        {icon('x')} &nbsp;<strong>INCORRECT</strong> — the answer is {correct_text}
+                        </div>""",
+                        unsafe_allow_html=True,
+                    )
+
+                with st.expander("💡 Explanation", expanded=True):
+                    st.markdown(aq["explanation"])
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # MOCK INTERVIEW TAB
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_mock:
-    st.markdown("<h2>🎤 Mock Interview</h2>", unsafe_allow_html=True)
+    st.markdown(f"<h2>{icon('mic', size=22)} Mock Interview</h2>", unsafe_allow_html=True)
 
     def _reset_mock():
         for k, v in {
@@ -1803,7 +1929,7 @@ with tab_mock:
     # ── Setup screen ────────────────────────────────────────────────────────────
     if not st.session_state.mock_active and not st.session_state.mock_done:
         st.markdown(
-            """<div style="color:#565f89; font-size:0.9rem; line-height:1.7; margin-bottom:1rem;">
+            """<div style="color:var(--color-neutral-600); font-size:0.9rem; line-height:1.7; margin-bottom:1rem;">
             A timed round of back-to-back questions — no hints, no answer reveals. Solve each,
             submit, and get a scorecard at the end. Just like the real thing.</div>""",
             unsafe_allow_html=True,
@@ -1863,7 +1989,7 @@ with tab_mock:
         head_l, head_r = st.columns([3, 1])
         with head_l:
             st.markdown(
-                f"<div style='color:#7aa2f7; font-weight:700; letter-spacing:0.06em;'>"
+                f"<div style='color:var(--color-accent); font-weight:700; letter-spacing:0.06em;'>"
                 f"QUESTION {i+1} / {total}</div>",
                 unsafe_allow_html=True,
             )
@@ -1882,10 +2008,10 @@ with tab_mock:
                 <span class="badge {diff_class}">{q['difficulty']}</span>&nbsp;
                 <span class="badge badge-topic">{q['topic']}</span>
             </div>
-            <div style="color:#565f89; font-size:0.8rem; font-style:italic; margin-bottom:0.8rem; line-height:1.6;">
+            <div style="color:var(--color-neutral-600); font-size:0.8rem; font-style:italic; margin-bottom:0.8rem; line-height:1.6;">
                 {q['business_context']}
             </div>
-            <div style="font-size:1.05rem; font-weight:500; color:#c0caf5; line-height:1.7;">
+            <div style="font-size:1.05rem; font-weight:500; color:var(--color-text); line-height:1.7;">
                 {q['question']}
             </div>
             </div>""",
@@ -1933,7 +2059,7 @@ with tab_mock:
         elif skip_mock:
             _record(False, "")
 
-        st.caption("No hints or reveals during a mock interview — that's the point. 💪")
+        st.caption("No hints or reveals during a mock interview — that's the point.")
 
     # ── Scorecard ───────────────────────────────────────────────────────────────
     elif st.session_state.mock_done:
@@ -1942,19 +2068,22 @@ with tab_mock:
         passed = sum(r["passed"] for r in results)
         total_time = int(time.time() - st.session_state.mock_overall_start) if st.session_state.mock_overall_start else int(sum(r["time"] for r in results))
         score_pct = round(passed / total * 100) if total else 0
-        verdict = ("🟢 Strong" if score_pct >= 80 else
-                   "🟡 Solid, keep drilling" if score_pct >= 50 else
-                   "🔴 Needs work")
+        verdict = ("Strong" if score_pct >= 80 else
+                   "Solid, keep drilling" if score_pct >= 50 else
+                   "Needs work")
+        verdict_color = ("var(--color-success)" if score_pct >= 80 else
+                          "var(--color-warning)" if score_pct >= 50 else
+                          "var(--color-danger)")
 
         st.markdown(
-            f"""<div class="drill-card" style="text-align:center; border-color:#7aa2f7;">
-            <div style="font-size:0.8rem; color:#565f89; letter-spacing:0.1em;">INTERVIEW COMPLETE</div>
+            f"""<div class="drill-card" style="text-align:center; border-color:var(--color-accent);">
+            <div style="font-size:0.8rem; color:var(--color-neutral-600); letter-spacing:0.1em;">INTERVIEW COMPLETE</div>
             <div style="font-size:3rem; font-weight:800;
-                background:linear-gradient(135deg,#7aa2f7,#bb9af7);
+                background:linear-gradient(135deg,var(--color-accent),var(--color-accent-2));
                 -webkit-background-clip:text; -webkit-text-fill-color:transparent;">
                 {passed} / {total}</div>
-            <div style="color:#c0caf5; font-size:1.1rem;">{score_pct}% · {verdict}</div>
-            <div style="color:#565f89; font-size:0.85rem; margin-top:0.4rem;">
+            <div style="color:{verdict_color}; font-size:1.1rem;">{score_pct}% · {verdict}</div>
+            <div style="color:var(--color-neutral-600); font-size:0.85rem; margin-top:0.4rem;">
                 Total time {total_time//60:02d}:{total_time%60:02d}</div>
             </div>""",
             unsafe_allow_html=True,

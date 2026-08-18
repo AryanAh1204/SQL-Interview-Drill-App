@@ -29,6 +29,61 @@ fully offline.
 cp .env.example .env   # then add your key
 ```
 
+## Aptitude section
+
+A fourth tab covers non-SQL placement prep — **Quantitative Aptitude**, **Logical
+Reasoning**, **Data Interpretation**, and **Verbal Ability**, each its own section.
+
+Unlike the SQL bank (static, pre-built), these are generated **live** on each
+request via [NVIDIA NIM](https://build.nvidia.com), so the pool never runs out and
+there's nothing to memorise. That means the tab needs a key at runtime:
+
+```bash
+NVIDIA_API_KEY=nvapi-...   # in .env locally, or as a host secret when deployed
+```
+
+Without a key the tab shows a setup notice and the rest of the app is unaffected.
+Answers are graded locally by option match — no API call is needed to score, only
+to fetch the question.
+
+Generation takes ~10-25s, so the app keeps a buffer of 5 ready questions per
+(section, difficulty) and tops it up on a background thread while you answer. The
+first question of a session blocks; after that they arrive in well under a second.
+Each parallel prefetch is pinned to a different area within the section — without
+that, five workers handed the same prompt come back with five variants of the same
+textbook question — and near-duplicates are dropped before entering the buffer.
+
+### Model choice matters a lot here
+
+The default is `nvidia/nemotron-3-super-120b-a12b`, picked by measurement rather than
+by size. On the free tier:
+
+| Model | Result |
+|---|---|
+| `meta/llama-3.1-70b-instruct` | 65s per question, then repeated timeouts; produced a question whose correct answer wasn't among its own options |
+| `meta/llama-3.1-8b-instruct` | Fast (~2s) but self-contradictory arithmetic and malformed JSON |
+| `nvidia/nemotron-3-super-120b-a12b` | ~10-25s, correct answers, valid JSON |
+
+Reasoning models spend tokens *thinking* before emitting `content`, and that counts
+against `max_tokens` — set it too low and the reply comes back empty. That's why
+`max_tokens` is 2400 rather than the few hundred the answer itself needs.
+
+NVIDIA retires model ids periodically. If generation starts failing with a 404:
+
+```bash
+python aptitude.py --list-models          # what your key can actually call
+python aptitude.py --try "Logical Reasoning"   # generate one and print it
+```
+
+Then set `NVIDIA_MODEL` to a live id. To check the parsing/validation logic
+without spending an API call: `python aptitude.py --selfcheck`.
+
+> Aptitude answers come from the model, and there's no oracle to verify them the
+> way `safe_execute()` verifies SQL. Shape errors (wrong option count, duplicate
+> options, out-of-range answer index) are rejected automatically, but a confidently
+> wrong answer can still get through — the worked explanation is shown so you can
+> catch it.
+
 ## Accounts & history storage
 
 User accounts, scores, and attempt history are stored through a backend chosen
@@ -54,6 +109,7 @@ is needed. `requirements.txt` already includes `psycopg2-binary` for the Postgre
 
    ```toml
    DATABASE_URL = "postgresql://user:pass@host/dbname?sslmode=require"
+   NVIDIA_API_KEY = "nvapi-..."       # required for the Aptitude tab
    ANTHROPIC_API_KEY = "sk-ant-..."   # optional, for AI feedback
    ```
 
@@ -75,7 +131,7 @@ before being saved, so the bank never contains a broken question.
 
 ## Features
 
-- **Dark UI** (Tokyo Night palette) with ambient cursor glow + gradient hover effects
+- **Dark UI** (Nocturne palette) — flat surfaces, line-art iconography, Inter + JetBrains Mono
 - **Mechanical keyboard typing sound** (synthesized Topre "thock", toggleable with a volume control)
 - **358-question bank** grounded in real schemas — only valid columns used
 - **8 SQL topics**: single-table aggregation, GROUP BY + HAVING, CTEs, window
@@ -85,5 +141,7 @@ before being saved, so the bank never contains a broken question.
 - **Result-set grading**: correct answers with different SQL still pass
 - **Safety**: only SELECT/WITH allowed; mutations rejected
 - **Pressure mode**: configurable countdown timer
+- **Aptitude tab**: live-generated quant / logical / data-interpretation / verbal
+  MCQs via NVIDIA NIM, prefetched 5 deep so questions arrive instantly
 - **User sign-in**: per-user progress tracking — pass rate, average time,
   daily stats, streaks, and weakest-topic targeting
